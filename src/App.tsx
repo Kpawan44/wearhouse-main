@@ -259,35 +259,37 @@ export default function App() {
               return;
             }
 
-            setCurrentUserName(userData.name || firebaseUser.email || 'Authorized Operator');
-            setCurrentRole(userData.role || 'Store Operator');
-            setCurrentWarehouseId(userData.warehouseId || 'WH-MUM');
-            setIsLoggedIn(true);
-            setAuthErrorMessage('');
-          } else {
-            // Check if newly created account is in the process of writing its initial profile
-            const creationTime = firebaseUser.metadata.creationTime 
-              ? new Date(firebaseUser.metadata.creationTime).getTime() 
-              : 0;
-            const isNewAccount = Date.now() - creationTime < 15000;
-            const isChinar = firebaseUser.email?.toLowerCase().trim() === 'chinarsales737@gmail.com';
-            
-            if (isNewAccount || isChinar) {
-              setCurrentUserName(firebaseUser.displayName || firebaseUser.email || 'Authorized Operator');
-              setCurrentRole(isChinar ? 'Super Admin' : 'Store Operator');
-              setCurrentWarehouseId('WH-MUM');
-              setIsLoggedIn(true);
-            } else {
-              // Revoke access if no profile exists and not self-healing
+            const activeRole = userData.role;
+            if (
+              activeRole !== 'Super Admin' &&
+              activeRole !== 'Store Operator' &&
+              activeRole !== 'Viewer'
+            ) {
               signOut(auth).then(() => {
                 sessionStorage.removeItem('stockflow_local_session');
                 setIsLoggedIn(false);
                 setCurrentUserUid('');
-                setAuthErrorMessage("Access Denied: No active user profile found. Please register or contact your administrator.");
-              }).catch((e) => {
-                console.error("Auto-logout failed:", e);
+                setAuthErrorMessage("Access Denied: Your user profile has no valid role assigned.");
+                setIsLoadingAuth(false);
               });
+              return;
             }
+
+            setCurrentUserName(userData.name || firebaseUser.email || 'Authorized Operator');
+            setCurrentRole(activeRole);
+            setCurrentWarehouseId(userData.warehouseId || 'WH-MUM');
+            setIsLoggedIn(true);
+            setAuthErrorMessage('');
+          } else {
+            // Revoke access if no profile exists
+            signOut(auth).then(() => {
+              sessionStorage.removeItem('stockflow_local_session');
+              setIsLoggedIn(false);
+              setCurrentUserUid('');
+              setAuthErrorMessage("Access Denied: No authorized user profile exists for this account. Please contact a Super Administrator.");
+            }).catch((e) => {
+              console.error("Auto-logout failed:", e);
+            });
           }
           setIsLoadingAuth(false);
         }, (err) => {

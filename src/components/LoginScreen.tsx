@@ -148,10 +148,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ warehouses, authErrorM
       }
 
       // 2. Direct Firestore Database Authentication & Profile Resolution
-      const isChinarOrAdmin = email.toLowerCase().includes('chinar') || username.toLowerCase().includes('admin') || !hasExistingUsers;
-      const roleToAssign: UserRole = isSignUp 
-        ? ((!hasExistingUsers || isChinarOrAdmin) ? 'Super Admin' : (selectedRole === 'Super Admin' ? 'Store Operator' : selectedRole))
-        : (isChinarOrAdmin ? 'Super Admin' : selectedRole);
+      const roleToAssign: UserRole = selectedRole === 'Super Admin' 
+        ? 'Store Operator' 
+        : selectedRole;
       const displayName = (isSignUp ? name.trim() : '') || username.trim() || 'Authorized Operator';
       const whCode = selectedWarehouseId || 'WH-MUM';
       const safeUid = firebaseUid || `usr_${email.replace(/[^a-z0-9]/gi, '_')}`;
@@ -213,7 +212,18 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ warehouses, authErrorM
             return;
           }
 
-          const activeRole: UserRole = userData.role || (isChinarOrAdmin ? 'Super Admin' : 'Store Operator');
+          const activeRole = userData.role;
+
+          if (
+            activeRole !== 'Super Admin' &&
+            activeRole !== 'Store Operator' &&
+            activeRole !== 'Viewer'
+          ) {
+            setError('Access Denied: Your user profile has no valid role assigned.');
+            setIsLoading(false);
+            return;
+          }
+
           const activeName: string = userData.name || username.trim() || 'Authorized Operator';
           const activeWh: string = userData.warehouseId || whCode;
 
@@ -234,29 +244,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ warehouses, authErrorM
             return;
           }
         } else {
-          // If user profile is not found in database yet but credentials provided:
-          // If admin or initial setup, provision admin session
-          if (isChinarOrAdmin) {
-            await setDoc(doc(db, 'users', safeUid), {
-              uid: safeUid,
-              name: displayName || 'Super Administrator',
-              email,
-              username: username.trim(),
-              role: 'Super Admin',
-              warehouseId: whCode,
-              status: 'Active',
-              createdAt: new Date().toISOString()
-            }, { merge: true });
-
-            if (onLocalLogin) {
-              onLocalLogin(displayName || 'Super Administrator', 'Super Admin', whCode);
-              return;
-            }
-          } else {
-            setError('Invalid credentials or unregistered operator. Please verify your username/password or click "Create Account".');
-            setIsLoading(false);
-            return;
-          }
+          setError('Access Denied: No authorized user profile exists for this account. Please contact a Super Administrator.');
+          setIsLoading(false);
+          return;
         }
       }
     } catch (err: any) {
