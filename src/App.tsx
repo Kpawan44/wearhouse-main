@@ -253,7 +253,7 @@ export default function App() {
                 sessionStorage.removeItem('stockflow_local_session');
                 setIsLoggedIn(false);
                 setCurrentUserUid('');
-                setAuthErrorMessage("Access Denied: Your account has been disabled by the Super Administrator.");
+                setAuthErrorMessage("Access Denied: This user account is disabled. Please contact a Super Administrator.");
                 setIsLoadingAuth(false);
               });
               return;
@@ -397,12 +397,7 @@ export default function App() {
       return raw ? JSON.parse(raw) : [];
     } catch { return []; }
   });
-  const [users, setUsers] = useState<User[]>(() => {
-    try {
-      const raw = localStorage.getItem('stockflow_cache_users');
-      return raw ? JSON.parse(raw) : [];
-    } catch { return []; }
-  });
+  const [users, setUsers] = useState<User[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>(() => {
     try {
       const raw = localStorage.getItem('stockflow_cache_notifications');
@@ -533,7 +528,6 @@ export default function App() {
         list.push({ uid: d.id, ...data } as User);
       });
       setUsers(list);
-      localStorage.setItem('stockflow_cache_users', JSON.stringify(list));
     }, handleErr);
 
     const unsubNtf = onSnapshot(collection(db, 'notifications'), (snap) => {
@@ -2182,11 +2176,21 @@ export default function App() {
   };
 
   const handleDeleteUser = async (uid: string, name: string, email: string) => {
+    if (currentRole !== 'Super Admin') {
+      alert('Access Denied: Only Super Admins are authorized to remove users.');
+      return;
+    }
     await deleteDoc(doc(db, 'users', uid));
+    setUsers((prev) => prev.filter((u) => u.uid !== uid));
+    localStorage.removeItem('stockflow_cache_users');
     await logAudit('Remove System User', 'Access Gatekeeper', `Removed user account: ${name} (${email})`);
   };
 
   const handleUpdateUser = async (uid: string, name: string, role: UserRole, warehouseId: string, phone?: string, status?: 'Active' | 'Disabled') => {
+    if (currentRole !== 'Super Admin') {
+      alert('Access Denied: Only Super Admins are authorized to update user profiles.');
+      return;
+    }
     await updateDoc(doc(db, 'users', uid), {
       name,
       role,
@@ -3189,7 +3193,7 @@ export default function App() {
                           movements: JSON.parse(localStorage.getItem('stockflow_cache_movements') || '[]'),
                           suppliers: JSON.parse(localStorage.getItem('stockflow_cache_suppliers') || '[]'),
                           customers: JSON.parse(localStorage.getItem('stockflow_cache_customers') || '[]'),
-                          users: JSON.parse(localStorage.getItem('stockflow_cache_users') || '[]'),
+                          users,
                           offlineQueue
                         }
                       };

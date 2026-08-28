@@ -185,7 +185,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ warehouses, authErrorM
 
         if (userData) {
           if (userData.status === 'Disabled') {
-            setError('Access Denied: Your user account has been disabled by the Super Administrator.');
+            setError('Access Denied: This user account is disabled. Please contact a Super Administrator.');
             setIsLoading(false);
             return;
           }
