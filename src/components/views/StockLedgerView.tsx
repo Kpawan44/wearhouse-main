@@ -54,6 +54,7 @@ interface StockLedgerViewProps {
   onMarkExceptionUnderReview?: (exceptionId: string, notes?: string) => Promise<void>;
   lastReport?: ReconciliationReportSummary | null;
   onNavigateToAdjustment?: () => void;
+  onAutoCorrectExceptions?: () => Promise<void>;
 }
 
 export const StockLedgerView: React.FC<StockLedgerViewProps> = ({
@@ -73,7 +74,8 @@ export const StockLedgerView: React.FC<StockLedgerViewProps> = ({
   onResolveException = async () => {},
   onMarkExceptionUnderReview = async () => {},
   lastReport,
-  onNavigateToAdjustment
+  onNavigateToAdjustment,
+  onAutoCorrectExceptions
 }) => {
   const [activeTab, setActiveTab] = useState<'ledger' | 'item_wise_ledger' | 'audit' | 'import_logs' | 'exceptions'>('ledger');
   const [searchQuery, setSearchQuery] = useState('');
@@ -956,6 +958,7 @@ export const StockLedgerView: React.FC<StockLedgerViewProps> = ({
           onMarkExceptionUnderReview={onMarkExceptionUnderReview}
           lastReport={lastReport}
           onNavigateToAdjustment={onNavigateToAdjustment}
+          onAutoCorrectExceptions={onAutoCorrectExceptions}
         />
       ) : activeTab === 'item_wise_ledger' ? (
         // ITEM-WISE RUNNING LEDGER

@@ -2323,6 +2323,69 @@ export default function App() {
     await logAudit('Review Inventory Exception', 'Exception Management', `Marked Exception [${exceptionId}] Under Review`);
   };
 
+  const handleAutoCorrectExceptions = async () => {
+    if (currentRole !== 'Super Admin') {
+      alert('Access Denied: Only Super Admins are authorized to execute automated batch reconciliation adjustments.');
+      return;
+    }
+    const activeExceptions = exceptions.filter(e => e.status !== 'RESOLVED');
+    if (activeExceptions.length === 0) {
+      alert('All inventory exceptions are already resolved.');
+      return;
+    }
+
+    let resolvedCount = 0;
+    for (const exc of activeExceptions) {
+      try {
+        const prod = products.find(p => p.itemCode === exc.itemCode);
+        const wh = warehouses.find(w => w.code === exc.warehouseId || w.id === exc.warehouseId);
+        if (!wh) continue;
+
+        let adjQty = 0;
+        let adjType: 'Increase' | 'Decrease' = 'Increase';
+        if (exc.difference > 0) {
+          adjQty = exc.difference;
+          adjType = 'Increase';
+        } else if (exc.difference < 0) {
+          adjQty = Math.abs(exc.difference);
+          adjType = 'Decrease';
+        } else if (exc.expectedQty < 0) {
+          adjQty = Math.abs(exc.expectedQty);
+          adjType = 'Increase';
+        }
+
+        if (adjQty > 0) {
+          const res = await postStockAdjustmentAtomic(db, {
+            itemCode: exc.itemCode,
+            itemName: exc.itemName || prod?.name || `Item ${exc.itemCode}`,
+            warehouseId: wh.id || wh.code,
+            warehouseName: wh.name,
+            barcode: prod?.barcode || `BAR-${exc.itemCode}`,
+            type: adjType,
+            qty: adjQty,
+            reason: 'Audit Reconciliation Correction',
+            remarks: `[Auto Reconcile] Aligned ledger baseline with physical balance for Exception ${exc.id}`,
+            user: `${currentUserName || 'Super Admin'} (Super Admin)`,
+            role: currentRole
+          });
+
+          await resolveInventoryException(db, exc.id!, {
+            resolvedBy: currentUserName || 'Super Admin',
+            resolutionNote: `Automatically reconciled and balanced via adjustment document ${res.overrideDocNo}`,
+            resolutionTransactionId: res.overrideDocNo
+          });
+          resolvedCount++;
+        }
+      } catch (err: any) {
+        console.error(`Failed to auto-correct exception ${exc.id}:`, err);
+      }
+    }
+
+    await reconcileStockBalances();
+    await logAudit('Auto Reconcile Stock Exceptions', 'Reconciliation Engine', `Batch reconciled ${resolvedCount} active inventory exceptions.`);
+    alert(`Successfully reconciled and balanced ${resolvedCount} inventory exceptions!`);
+  };
+
   const handleReverseMovement = async (id: string, customReason?: string) => {
     try {
       const barcodesMap: Record<string, string> = {};
@@ -2532,6 +2595,7 @@ export default function App() {
             onMarkExceptionUnderReview={handleMarkExceptionUnderReview}
             lastReport={lastReconciliationReport}
             onNavigateToAdjustment={() => setActiveTab('adjustment')}
+            onAutoCorrectExceptions={handleAutoCorrectExceptions}
           />
         );
       case 'reports':

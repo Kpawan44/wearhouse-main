@@ -14,7 +14,8 @@ import {
   X, 
   ExternalLink,
   Layers,
-  Database
+  Database,
+  Wrench
 } from 'lucide-react';
 import { 
   InventoryException, 
@@ -41,6 +42,7 @@ interface InventoryExceptionsViewProps {
   onMarkExceptionUnderReview: (exceptionId: string, notes?: string) => Promise<void>;
   lastReport?: ReconciliationReportSummary | null;
   onNavigateToAdjustment?: () => void;
+  onAutoCorrectExceptions?: () => Promise<void>;
 }
 
 export const InventoryExceptionsView: React.FC<InventoryExceptionsViewProps> = ({
@@ -54,13 +56,15 @@ export const InventoryExceptionsView: React.FC<InventoryExceptionsViewProps> = (
   onResolveException,
   onMarkExceptionUnderReview,
   lastReport,
-  onNavigateToAdjustment
+  onNavigateToAdjustment,
+  onAutoCorrectExceptions
 }) => {
   const [statusFilter, setStatusFilter] = useState<'ALL' | ExceptionStatus>('ALL');
   const [categoryFilter, setCategoryFilter] = useState<'ALL' | ExceptionCategory | 'HEALTHY'>('ALL');
   const [warehouseFilter, setWarehouseFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isReconciling, setIsReconciling] = useState<boolean>(false);
+  const [isAutoCorrecting, setIsAutoCorrecting] = useState<boolean>(false);
   const [reconcileMessage, setReconcileMessage] = useState<string | null>(null);
 
   // Modal States
@@ -205,6 +209,20 @@ export const InventoryExceptionsView: React.FC<InventoryExceptionsViewProps> = (
     }
   };
 
+  // Auto Correct all exceptions via Super Admin atomic adjustment
+  const handleAutoCorrect = async () => {
+    if (!onAutoCorrectExceptions) return;
+    if (!window.confirm("Are you sure you want to auto-reconcile and align all active stock discrepancies with official audit adjustment entries?")) return;
+    setIsAutoCorrecting(true);
+    try {
+      await onAutoCorrectExceptions();
+    } catch (err: any) {
+      alert(`Auto-reconciliation error: ${err.message || err}`);
+    } finally {
+      setIsAutoCorrecting(false);
+    }
+  };
+
   // Export CSV
   const handleExportCSV = () => {
     const headers = [
@@ -316,9 +334,21 @@ export const InventoryExceptionsView: React.FC<InventoryExceptionsViewProps> = (
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
+            {currentUserRole === 'Super Admin' && onAutoCorrectExceptions && (
+              <button
+                onClick={handleAutoCorrect}
+                disabled={isAutoCorrecting || isReconciling}
+                className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold px-3.5 py-2 rounded-lg text-xs flex items-center gap-2 cursor-pointer transition-all shadow-xs"
+                title="Automatically post adjustment documents to align ledger and resolve discrepancies"
+              >
+                <Wrench className={`w-4 h-4 ${isAutoCorrecting ? 'animate-spin' : ''}`} />
+                {isAutoCorrecting ? 'Aligning Ledger...' : 'Auto-Reconcile Discrepancies'}
+              </button>
+            )}
+
             <button
               onClick={handleRunReconciliation}
-              disabled={isReconciling}
+              disabled={isReconciling || isAutoCorrecting}
               className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold px-3.5 py-2 rounded-lg text-xs flex items-center gap-2 cursor-pointer transition-all shadow-xs"
               title="Run ledger reconciliation audit"
             >
