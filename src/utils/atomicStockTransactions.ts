@@ -43,20 +43,12 @@ export function assertCanWriteStock(
 }
 
 export function assertSuperAdmin(
-  user: string,
+  role: UserRole,
   actionName: string = 'perform manual adjustments or overrides'
 ): void {
-  if (!user || user.trim() === '') {
+  if (role !== 'Super Admin') {
     throw new Error(
-      `Access Denied: Unauthenticated or missing user identity cannot ${actionName}. Only "Super Admin" is authorized.`
-    );
-  }
-  const clean = user.trim();
-  const lower = clean.toLowerCase();
-  const isSuperAdmin = clean === 'Super Admin' || lower.startsWith('super admin') || lower.includes('super admin');
-  if (!isSuperAdmin) {
-    throw new Error(
-      `Access Denied: Only "Super Admin" is authorized to ${actionName}.`
+      `Access Denied: Role "${role}" is not authorized to ${actionName}. Only Super Admin is authorized.`
     );
   }
 }
@@ -560,11 +552,12 @@ export async function undoTransferAtomic(
     transferId: string;
     targetStatus: 'Pending Approval' | 'Draft';
     user: string;
+    role: UserRole;
     productBarcodes?: Record<string, string>;
   }
 ): Promise<{ success: boolean; transferNumber: string }> {
-  const { transferId, targetStatus, user, productBarcodes = {} } = params;
-  assertSuperAdmin(user, 'undo or revert Transfer orders');
+  const { transferId, targetStatus, user, role, productBarcodes = {} } = params;
+  assertSuperAdmin(role, 'undo or revert Transfer orders');
   const transferDocRef = doc(db, 'transfers', transferId);
 
   return await runTransaction(db, async (transaction) => {
@@ -776,9 +769,10 @@ export async function postStockAdjustmentAtomic(
     reason: string;
     remarks: string;
     user: string;
+    role: UserRole;
   }
 ): Promise<{ movementId: string; overrideDocNo: string; stockDocId: string }> {
-  assertSuperAdmin(adj.user, 'execute manual stock level overrides');
+  assertSuperAdmin(adj.role, 'execute manual stock level overrides');
   const stockDocId = getStockDocId(adj.warehouseId, adj.itemCode);
   const stockDocRef = doc(db, 'stocks', stockDocId);
   const movementDocRef = doc(collection(db, 'movements'));
@@ -888,11 +882,12 @@ export async function revertStockAdjustmentAtomic(
     originalMovementId: string;
     reason: string;
     user: string;
+    role: UserRole;
     productBarcodes?: Record<string, string>;
   }
 ): Promise<{ reversalMovementId: string; revRef: string }> {
-  const { originalMovementId, reason, user, productBarcodes = {} } = params;
-  assertSuperAdmin(user, 'revert manual stock level overrides');
+  const { originalMovementId, reason, user, role, productBarcodes = {} } = params;
+  assertSuperAdmin(role, 'revert manual stock level overrides');
   const origMvtRef = doc(db, 'movements', originalMovementId);
 
   return await runTransaction(db, async (transaction) => {
@@ -1098,10 +1093,11 @@ export async function addProductWithInitialStockAtomic(
 export async function deleteInwardAtomic(
   db: Firestore,
   inwardId: string,
-  user: string,
+  role: UserRole,
+  user: string = 'Super Admin',
   productBarcodes: Record<string, string> = {}
 ): Promise<{ success: boolean; grnNumber: string }> {
-  assertSuperAdmin(user, 'delete Inward GRN records');
+  assertSuperAdmin(role, 'delete Inward GRN records');
   const inwardDocRef = doc(db, 'inwards', inwardId);
 
   return await runTransaction(db, async (transaction) => {
@@ -1162,10 +1158,11 @@ export async function deleteInwardAtomic(
 export async function deleteOutwardAtomic(
   db: Firestore,
   outwardId: string,
-  user: string,
+  role: UserRole,
+  user: string = 'Super Admin',
   productBarcodes: Record<string, string> = {}
 ): Promise<{ success: boolean; dispatchNumber: string }> {
-  assertSuperAdmin(user, 'delete Outward Dispatch records');
+  assertSuperAdmin(role, 'delete Outward Dispatch records');
   const outwardDocRef = doc(db, 'outwards', outwardId);
 
   return await runTransaction(db, async (transaction) => {
@@ -1226,10 +1223,11 @@ export async function deleteOutwardAtomic(
 export async function deleteTransferAtomic(
   db: Firestore,
   transferId: string,
-  user: string,
+  role: UserRole,
+  user: string = 'Super Admin',
   productBarcodes: Record<string, string> = {}
 ): Promise<{ success: boolean; transferNumber: string }> {
-  assertSuperAdmin(user, 'delete Transfer requests');
+  assertSuperAdmin(role, 'delete Transfer requests');
   const transferDocRef = doc(db, 'transfers', transferId);
 
   return await runTransaction(db, async (transaction) => {
@@ -1418,11 +1416,12 @@ export async function reverseMovementAtomic(
     movementId: string;
     customReason?: string;
     user: string;
+    role: UserRole;
     productBarcodes?: Record<string, string>;
   }
 ): Promise<{ reversalMovementId: string; revRef: string }> {
-  const { movementId, customReason, user, productBarcodes = {} } = params;
-  assertSuperAdmin(user, 'reverse ledger movements');
+  const { movementId, customReason, user, role, productBarcodes = {} } = params;
+  assertSuperAdmin(role, 'reverse ledger movements');
   const mvtRef = doc(db, 'movements', movementId);
 
   return await runTransaction(db, async (transaction) => {

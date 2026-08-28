@@ -796,7 +796,8 @@ export default function App() {
                 qty: adj.qty,
                 reason: adj.reason,
                 remarks: `[Offline Synced] ${adj.remarks || ''}`,
-                user: `${currentRole} Operator (Synced)`
+                user: `${currentRole} Operator (Synced)`,
+                role: currentRole
               });
 
               await logAudit('Manual Stock Adjustment (Synced)', 'Stock Adjustment', `ADJ No: ${res.overrideDocNo}, Item: ${adj.itemCode}, Qty: ${adj.qty} in WH: ${adj.warehouseId}`);
@@ -815,6 +816,7 @@ export default function App() {
               originalMovementId: adjustmentIdOrRef,
               reason: `[Offline Synced REVERSAL] ${reason}`,
               user: `${currentRole} Operator (Synced)`,
+              role: currentRole,
               productBarcodes: barcodeMap
             });
 
@@ -1792,6 +1794,7 @@ export default function App() {
         transferId: id,
         targetStatus,
         user: `${currentRole} Admin`,
+        role: currentRole,
         productBarcodes: barcodesMap
       });
 
@@ -1851,7 +1854,8 @@ export default function App() {
         qty: adj.qty,
         reason: adj.reason,
         remarks: adj.remarks,
-        user: `${currentRole} Operator`
+        user: `${currentRole} Operator`,
+        role: currentRole
       });
 
       await logAudit(
@@ -1928,6 +1932,7 @@ export default function App() {
         originalMovementId: targetMvtId,
         reason,
         user: `${currentRole} Operator`,
+        role: currentRole,
         productBarcodes: barcodesMap
       });
 
@@ -2204,7 +2209,7 @@ export default function App() {
         barcodesMap[p.itemCode] = p.barcode;
       }
 
-      const res = await deleteInwardAtomic(db, id, `${currentRole} Operator`, barcodesMap);
+      const res = await deleteInwardAtomic(db, id, currentRole, `${currentRole} Operator`, barcodesMap);
       await reconcileStockBalances();
       await logAudit('Delete GRN Document', 'Material Inward', `Deleted Inbound ID: ${id} (GRN: ${res.grnNumber}) and recorded reversal movement.`);
     } else {
@@ -2224,7 +2229,7 @@ export default function App() {
         barcodesMap[p.itemCode] = p.barcode;
       }
 
-      const res = await deleteOutwardAtomic(db, id, `${currentRole} Operator`, barcodesMap);
+      const res = await deleteOutwardAtomic(db, id, currentRole, `${currentRole} Operator`, barcodesMap);
       await reconcileStockBalances();
       await logAudit('Delete Dispatch Outward', 'Material Outward', `Deleted Outbound ID: ${id} (Dispatch: ${res.dispatchNumber}) and recorded reversal movement.`);
     } else {
@@ -2246,7 +2251,7 @@ export default function App() {
         barcodesMap[p.itemCode] = p.barcode;
       }
 
-      const res = await deleteTransferAtomic(db, id, `${currentRole} Operator`, barcodesMap);
+      const res = await deleteTransferAtomic(db, id, currentRole, `${currentRole} Operator`, barcodesMap);
       await reconcileStockBalances();
       await logAudit('Delete Transfer Request', 'Inter-Warehouse Transfer', `Deleted Transfer ID: ${id} (No: ${res.transferNumber}) and recorded compensating ledger movements.`);
     } else {
@@ -2325,6 +2330,7 @@ export default function App() {
         movementId: id,
         customReason,
         user: `${currentRole} Operator`,
+        role: currentRole,
         productBarcodes: barcodesMap
       });
 
