@@ -11,7 +11,9 @@
     "lint": "tsc --noEmit",
     "electron:dev": "electron .",
     "build:exe": "vite build && electron-builder --win",
-    "build:unpacked": "vite build && electron-builder --win --dir"
+    "build:unpacked": "vite build && electron-builder --win --dir",
+    "android:sync": "vite build && npx cap sync android",
+    "android:open": "npx cap open android"
   },
   "build": {
     "appId": "com.stockflow.warehouse.erp",
@@ -32,6 +34,7 @@
     }
   },
   "dependencies": {
+    "@capacitor/core": "^8.5.0",
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
@@ -49,6 +52,8 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/cli": "^8.5.0",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",

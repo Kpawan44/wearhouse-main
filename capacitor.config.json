@@ -1,0 +1,9 @@
+﻿{
+  "appId": "com.stockflow.warehouse.erp",
+  "appName": "StockFlow ERP",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https"
+  }
+}
