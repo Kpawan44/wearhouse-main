@@ -1,4 +1,4 @@
-import { 
+﻿import { 
   Firestore, 
   collection, 
   doc, 
@@ -18,7 +18,8 @@ import {
   ReconciliationReportSummary, 
   ReconciliationItemResult, 
   OrphanRecordResult, 
-  ExceptionStatus 
+  ExceptionStatus,
+  ExceptionCategory 
 } from '../types';
 
 export interface RunReconciliationParams {
@@ -39,10 +40,10 @@ export interface RunReconciliationParams {
  * Calculates expected quantities from immutable ledger history and compares against current stock.
  * Detects:
  *  1. Balanced/Healthy records (Difference = 0)
- *  2. Discrepancies (Expected != Current)
- *  3. Negative stock (Expected < 0, NEVER silently converts to 0)
- *  4. Orphan records (Preserves evidence, NEVER silently deletes)
- *  5. Upserts persistent idempotent exception records in Firestore
+ *  2. Discrepancies (Expected != Current for available or in-transit stock)
+ *  3. Negative stock (Expected < 0 or Stored < 0, NEVER silently converts to 0)
+ *  4. Orphan records (Orphan movements AND orphan stock records, NEVER silently deletes)
+ *  5. Upserts persistent idempotent exception records in Firestore without reopening resolved exceptions
  */
 export async function runInventoryReconciliation(
   paramOrDb: RunReconciliationParams | Firestore,
@@ -105,7 +106,7 @@ export async function runInventoryReconciliation(
   const activeInwardsSet = new Set(inwards.map(i => i.grnNumber));
   const activeOutwardsSet = new Set(outwards.map(o => o.dispatchNumber));
 
-  // 1. Detect Orphan Records (WITHOUT DELETING ANY EVIDENCE) & Accumulate Valid Ledger Quantities
+  // 1. Detect Orphan Movement Records (WITHOUT DELETING ANY EVIDENCE) & Accumulate Valid Ledger Quantities
   const orphanResults: OrphanRecordResult[] = [];
   const orphanExceptionsToUpsert: InventoryException[] = [];
 
@@ -190,13 +191,16 @@ export async function runInventoryReconciliation(
     if (isOrphan) {
       const recordId = mvt.id || `MVT-${mvt.referenceNumber}-${mvt.itemCode}`;
       
-      // Look for existing unresolved exception for this orphan
-      const existingOrphanExc = existingExceptions.find(e => 
+      // Look for existing active exception for this orphan movement
+      const activeOrphanExc = existingExceptions.find(e => 
         e.orphanDetails?.recordId === recordId && 
         (e.status === 'OPEN' || e.status === 'UNDER_REVIEW')
       );
-
-      const exceptionId = existingOrphanExc?.id || `EXC_ORPHAN_${recordId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+      const isResolved = existingExceptions.some(e =>
+        e.orphanDetails?.recordId === recordId && e.status === 'RESOLVED'
+      );
+      const baseOrphanId = `EXC_ORPHAN_${recordId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+      const exceptionId = activeOrphanExc?.id || (isResolved ? `${baseOrphanId}_${Date.now()}` : baseOrphanId);
 
       orphanResults.push({
         recordId,
@@ -219,9 +223,9 @@ export async function runInventoryReconciliation(
         difference: -(mvt.qty || 0),
         reason: `ORPHAN RECORD: ${reason.trim()}`,
         category: 'ORPHAN_RECORD',
-        status: existingOrphanExc ? existingOrphanExc.status : 'OPEN',
-        detectedAt: existingOrphanExc ? existingOrphanExc.detectedAt : now,
-        detectedBy: existingOrphanExc ? existingOrphanExc.detectedBy : currentUserName,
+        status: activeOrphanExc ? activeOrphanExc.status : 'OPEN',
+        detectedAt: activeOrphanExc ? activeOrphanExc.detectedAt : now,
+        detectedBy: activeOrphanExc ? activeOrphanExc.detectedBy : currentUserName,
         relatedTransactionIds: [mvt.referenceNumber || recordId],
         orphanDetails: {
           recordId,
@@ -229,11 +233,23 @@ export async function runInventoryReconciliation(
           referencedEntity,
           possibleCause: reason.trim()
         },
-        notes: existingOrphanExc?.notes || `Detected during system reconciliation audit on ${now.slice(0, 10)}.`
+        notes: activeOrphanExc?.notes || `Detected during system reconciliation audit on ${now.slice(0, 10)}.`
       });
 
-      // CRITICAL: Exclude orphaned movements from contributing to the valid expected stock calculation!
-      // The original movement is preserved in Firestore for forensic audit, but skipped here.
+      // Exclude orphaned movements from contributing to the valid expected stock calculation
+      continue;
+    }
+
+    // CRITICAL (Change #12): Prevent Transfer Shortage double-counting!
+    // The "Transfer In" record already contains the actual physically received quantity.
+    // The "Transfer Shortage" record is an informational/audit event only and must NOT subtract from expected available stock.
+    if (mvt.transactionType === 'Transfer Shortage') {
+      if (mvt.referenceNumber && mvt.warehouseId && mvt.itemCode) {
+        const key = getKey(mvt.warehouseId, mvt.itemCode);
+        if (stockMap.has(key)) {
+          stockMap.get(key)!.relatedTxIds.add(mvt.referenceNumber);
+        }
+      }
       continue;
     }
 
@@ -268,7 +284,73 @@ export async function runInventoryReconciliation(
     }
   }
 
-  // Factor in-transit quantities from active transfers
+  // 2. Detect Orphan Stock Records (WITHOUT DELETING ANY EVIDENCE)
+  for (const s of stocks) {
+    if (!s.warehouseId || !s.itemCode) continue;
+    const isWhMissing = !validWarehousesMap.has(s.warehouseId);
+    const isProdMissing = !validProductsMap.has(s.itemCode);
+
+    if (isWhMissing || isProdMissing) {
+      let referencedEntity = '';
+      let reason = '';
+      if (isWhMissing) {
+        referencedEntity = `Warehouse: ${s.warehouseId}`;
+        reason = `Stock record references deleted or missing Warehouse (${s.warehouseId}).`;
+      }
+      if (isProdMissing) {
+        referencedEntity = (referencedEntity ? `${referencedEntity}, ` : '') + `Product: ${s.itemCode}`;
+        reason += (reason ? ' ' : '') + `Stock record references deleted or missing SKU (${s.itemCode}).`;
+      }
+
+      const stockRecordId = s.id || `STOCK_${s.warehouseId}_${s.itemCode}`;
+
+      const activeOrphanExc = existingExceptions.find(e => 
+        e.orphanDetails?.recordId === stockRecordId && 
+        (e.status === 'OPEN' || e.status === 'UNDER_REVIEW')
+      );
+      const isResolved = existingExceptions.some(e =>
+        e.orphanDetails?.recordId === stockRecordId && e.status === 'RESOLVED'
+      );
+      const baseStockExcId = `EXC_ORPHAN_STOCK_${stockRecordId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+      const exceptionId = activeOrphanExc?.id || (isResolved ? `${baseStockExcId}_${Date.now()}` : baseStockExcId);
+
+      orphanResults.push({
+        recordId: stockRecordId,
+        collection: 'stocks',
+        referencedEntity: referencedEntity || s.warehouseId || s.itemCode,
+        detectedDate: now,
+        possibleCause: `ORPHAN STOCK RECORD: ${reason.trim()}`,
+        hasException: true,
+        exceptionId
+      });
+
+      orphanExceptionsToUpsert.push({
+        id: exceptionId,
+        warehouseId: s.warehouseId,
+        warehouseName: s.warehouseName || s.warehouseId,
+        itemCode: s.itemCode,
+        itemName: s.itemName || s.itemCode,
+        expectedQty: 0,
+        currentQty: s.availableQty || 0,
+        difference: -(s.availableQty || 0),
+        reason: `ORPHAN STOCK RECORD: ${reason.trim()}`,
+        category: 'ORPHAN_RECORD',
+        status: activeOrphanExc ? activeOrphanExc.status : 'OPEN',
+        detectedAt: activeOrphanExc ? activeOrphanExc.detectedAt : now,
+        detectedBy: activeOrphanExc ? activeOrphanExc.detectedBy : currentUserName,
+        relatedTransactionIds: [stockRecordId],
+        orphanDetails: {
+          recordId: stockRecordId,
+          collection: 'stocks',
+          referencedEntity,
+          possibleCause: reason.trim()
+        },
+        notes: activeOrphanExc?.notes || `Detected during system reconciliation audit on ${now.slice(0, 10)}.`
+      });
+    }
+  }
+
+  // 3. Factor in-transit quantities from active transfers
   for (const tr of transfers) {
     if (tr.status === 'Dispatched' || tr.status === 'In Transit') {
       const items = tr.items && tr.items.length > 0 
@@ -299,7 +381,7 @@ export async function runInventoryReconciliation(
     }
   }
 
-  // 3. Compare Expected Balances against Stored Balances (WITHOUT SILENTLY OVERWRITING)
+  // 4. Compare Expected Balances against Stored Balances (WITHOUT SILENTLY OVERWRITING)
   const storedStockMap = new Map<string, Stock>();
   for (const s of stocks) {
     if (!s.warehouseId || !s.itemCode) continue;
@@ -324,6 +406,11 @@ export async function runInventoryReconciliation(
     const wh = validWarehousesMap.get(whId);
     const prod = validProductsMap.get(itemCode);
 
+    // Skip orphan stock records here as they are already processed in section 2
+    if ((stored && (!wh || !prod)) || (!wh && !prod)) {
+      continue;
+    }
+
     const warehouseName = wh ? wh.name : (stored?.warehouseName || computed?.warehouseName || whId);
     const itemName = prod ? prod.name : (stored?.itemName || computed?.itemName || itemCode);
 
@@ -331,6 +418,12 @@ export async function runInventoryReconciliation(
     const expectedQty = computed ? computed.availableQty : 0;
     const currentQty = stored ? (stored.availableQty || 0) : 0;
     const difference = currentQty - expectedQty; // negative means stock is short, positive means excess stored
+
+    // In-Transit Reconciliation (Change #12)
+    const expectedInTransitQty = computed ? computed.inTransitQty : 0;
+    const storedInTransitQty = stored ? (stored.inTransitQty || 0) : 0;
+    const inTransitDifference = storedInTransitQty - expectedInTransitQty;
+    const isInTransitDiscrepant = inTransitDifference !== 0;
 
     let itemStatus: 'HEALTHY' | 'DISCREPANCY' | 'NEGATIVE_STOCK' = 'HEALTHY';
     let isDiscrepancy = false;
@@ -341,8 +434,13 @@ export async function runInventoryReconciliation(
       itemStatus = 'NEGATIVE_STOCK';
       isNegative = true;
       negativeStockCount++;
-    } else if (difference !== 0) {
-      // Mismatch between stored stock and expected ledger stock
+    } else if (stored && (stored.availableQty !== undefined && stored.availableQty < 0)) {
+      // Negative stored stock integrity violation
+      itemStatus = 'NEGATIVE_STOCK';
+      isNegative = true;
+      negativeStockCount++;
+    } else if (difference !== 0 || isInTransitDiscrepant) {
+      // Mismatch between stored stock and expected ledger / in-transit stock
       itemStatus = 'DISCREPANCY';
       isDiscrepancy = true;
       discrepancyCount++;
@@ -351,21 +449,58 @@ export async function runInventoryReconciliation(
       healthyCount++;
     }
 
-    // Look for existing unresolved exception for this (warehouseId, itemCode)
-    const existingExc = existingExceptions.find(e => 
+    // Look for existing ACTIVE (unresolved) exception for this (warehouseId, itemCode)
+    const activeExc = existingExceptions.find(e => 
       e.warehouseId === whId && 
       e.itemCode === itemCode && 
       (e.status === 'OPEN' || e.status === 'UNDER_REVIEW') &&
       e.category !== 'ORPHAN_RECORD'
     );
 
-    const deterministicId = existingExc?.id || `EXC_${whId}_${itemCode}`;
+    // Check if a previously RESOLVED exception exists with the base ID or for this pair
+    const baseId = `EXC_${whId}_${itemCode}`;
+    const isBaseIdResolved = existingExceptions.some(e => 
+      e.id === baseId && e.status === 'RESOLVED'
+    );
+    const resolvedCount = existingExceptions.filter(e =>
+      e.warehouseId === whId && e.itemCode === itemCode && e.status === 'RESOLVED' && e.category !== 'ORPHAN_RECORD'
+    ).length;
+
+    // Never reopen or overwrite a resolved exception! Generate a new recurrence ID when reoccurring.
+    let deterministicId: string;
+    if (activeExc) {
+      deterministicId = activeExc.id || baseId;
+    } else if (isBaseIdResolved || resolvedCount > 0) {
+      deterministicId = `${baseId}_${Date.now()}`;
+    } else {
+      deterministicId = baseId;
+    }
 
     if (isNegative || isDiscrepancy) {
-      const category = isNegative ? 'NEGATIVE_STOCK' : 'DISCREPANCY';
-      const reason = isNegative
-        ? `STOCK INTEGRITY EXCEPTION: Expected stock is negative (${expectedQty}), stored stock is ${currentQty}. Difference: ${difference}.`
-        : `INVENTORY DISCREPANCY: Expected stock from ledger is ${expectedQty}, but stored balance is ${currentQty}. Difference: ${difference > 0 ? '+' : ''}${difference}.`;
+      let category: ExceptionCategory = 'DISCREPANCY';
+      let reason = '';
+
+      if (isNegative) {
+        category = 'NEGATIVE_STOCK';
+        reason = expectedQty < 0
+          ? `STOCK INTEGRITY EXCEPTION: Expected available stock is negative (${expectedQty}), stored available stock is ${currentQty}. Difference: ${difference > 0 ? '+' : ''}${difference}.`
+          : `STOCK INTEGRITY EXCEPTION: Stored available stock is negative (${currentQty}), but expected available stock is ${expectedQty}. Difference: ${difference > 0 ? '+' : ''}${difference}.`;
+      } else if (difference !== 0 && isInTransitDiscrepant) {
+        category = 'DISCREPANCY';
+        reason = `INVENTORY & IN-TRANSIT DISCREPANCY: Expected available: ${expectedQty}, stored available: ${currentQty} (Diff: ${difference > 0 ? '+' : ''}${difference}). Expected in-transit: ${expectedInTransitQty}, stored in-transit: ${storedInTransitQty} (Diff: ${inTransitDifference > 0 ? '+' : ''}${inTransitDifference}).`;
+      } else if (difference !== 0) {
+        category = 'DISCREPANCY';
+        if (!stored || stored.availableQty === undefined) {
+          reason = `INVENTORY DISCREPANCY: Expected stock from ledger is ${expectedQty}, but no stock balance document exists (Stored: 0). Difference: ${difference > 0 ? '+' : ''}${difference}.`;
+        } else if (expectedQty === 0) {
+          reason = `INVENTORY DISCREPANCY: Stored stock is ${currentQty}, but no valid ledger movements exist (Expected: 0). Difference: +${currentQty}.`;
+        } else {
+          reason = `INVENTORY DISCREPANCY: Expected available stock from valid ledger movements is ${expectedQty}, but stored available balance is ${currentQty}. Difference: ${difference > 0 ? '+' : ''}${difference}.`;
+        }
+      } else if (isInTransitDiscrepant) {
+        category = 'DISCREPANCY';
+        reason = `IN-TRANSIT DISCREPANCY: Expected in-transit stock from active transfers is ${expectedInTransitQty}, but stored in-transit balance is ${storedInTransitQty}. Difference: ${inTransitDifference > 0 ? '+' : ''}${inTransitDifference}.`;
+      }
 
       const relatedTxIds = computed ? Array.from(computed.relatedTxIds) : [];
 
@@ -381,11 +516,11 @@ export async function runInventoryReconciliation(
         difference,
         reason,
         category,
-        status: existingExc ? existingExc.status : 'OPEN',
-        detectedAt: existingExc ? existingExc.detectedAt : now,
-        detectedBy: existingExc ? existingExc.detectedBy : currentUserName,
+        status: activeExc ? activeExc.status : 'OPEN',
+        detectedAt: activeExc ? activeExc.detectedAt : now,
+        detectedBy: activeExc ? activeExc.detectedBy : currentUserName,
         relatedTransactionIds: relatedTxIds,
-        notes: existingExc?.notes || `Detected during reconciliation on ${now.slice(0, 10)}.`
+        notes: activeExc?.notes || `Detected during reconciliation on ${now.slice(0, 10)}.`
       });
 
       itemResults.push({
@@ -396,10 +531,13 @@ export async function runInventoryReconciliation(
         expectedQty,
         currentQty,
         difference,
+        expectedInTransitQty,
+        currentInTransitQty: storedInTransitQty,
+        inTransitDifference,
         status: itemStatus,
         hasException: true,
         exceptionId: deterministicId,
-        exceptionStatus: existingExc ? existingExc.status : 'OPEN'
+        exceptionStatus: activeExc ? activeExc.status : 'OPEN'
       });
     } else {
       // Healthy record
@@ -411,15 +549,18 @@ export async function runInventoryReconciliation(
         expectedQty,
         currentQty,
         difference: 0,
+        expectedInTransitQty,
+        currentInTransitQty: storedInTransitQty,
+        inTransitDifference: 0,
         status: 'HEALTHY',
-        hasException: !!existingExc,
-        exceptionId: existingExc?.id,
-        exceptionStatus: existingExc?.status
+        hasException: !!activeExc,
+        exceptionId: activeExc?.id,
+        exceptionStatus: activeExc?.status
       });
     }
   }
 
-  // 4. Persist / Upsert Exceptions to Firestore Idempotently
+  // 5. Persist / Upsert Exceptions to Firestore Idempotently (NEVER overwriting resolved exceptions)
   const allExceptionsToUpsert = [...stockExceptionsToUpsert, ...orphanExceptionsToUpsert];
 
   for (const exc of allExceptionsToUpsert) {

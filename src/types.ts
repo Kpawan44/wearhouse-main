@@ -317,6 +317,9 @@ export interface ReconciliationItemResult {
   expectedQty: number;
   currentQty: number;
   difference: number;
+  expectedInTransitQty?: number;
+  currentInTransitQty?: number;
+  inTransitDifference?: number;
   status: 'HEALTHY' | 'DISCREPANCY' | 'NEGATIVE_STOCK';
   hasException: boolean;
   exceptionId?: string;
