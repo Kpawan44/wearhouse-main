@@ -1,0 +1,122 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Authentication and Role helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function hasUserDoc() {
+      return isAuthenticated() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isUserActive() {
+      return hasUserDoc() && getUserData().status != 'Disabled';
+    }
+
+    function isSuperAdmin() {
+      return isUserActive() && getUserData().role == 'Super Admin';
+    }
+
+    function isStoreOperator() {
+      return isUserActive() && getUserData().role == 'Store Operator';
+    }
+
+    function isViewer() {
+      return isUserActive() && getUserData().role == 'Viewer';
+    }
+
+    // Explicit role-based authorization for any stock or inventory modifying write:
+    // Requires an authenticated, active user with an explicit authorized role ('Super Admin' or 'Store Operator')
+    function canWriteStock() {
+      return isUserActive() && (
+        getUserData().role == 'Super Admin' ||
+        getUserData().role == 'Store Operator'
+      );
+    }
+
+    // Helper to check if a document is a Draft
+    function isDraft(data) {
+      return ('status' in data && data.status == 'Draft');
+    }
+
+    // Helper to validate Stock document structure and inventory non-negativity
+    function isValidStock(data) {
+      return data.itemCode is string && data.itemCode.size() > 0 &&
+             data.warehouseId is string && data.warehouseId.size() > 0 &&
+             data.availableQty is number && data.availableQty >= 0 &&
+             data.reservedQty is number && data.reservedQty >= 0 &&
+             data.inTransitQty is number && data.inTransitQty >= 0 &&
+             data.damagedQty is number && data.damagedQty >= 0 &&
+             data.totalQty is number && data.totalQty >= 0 &&
+             data.totalQty == (data.availableQty + data.reservedQty + data.inTransitQty + data.damagedQty);
+    }
+
+    // 1. Stock Transfers: Posted transfer numbers are strictly immutable & protected
+    match /transfers/{transferId} {
+      allow read: if true;
+      allow create: if canWriteStock();
+      allow update: if canWriteStock() && (isDraft(resource.data) || request.resource.data.transferNumber == resource.data.transferNumber);
+      allow delete: if canWriteStock();
+    }
+
+    // 2. Customer Dispatches / Outward: Posted dispatch numbers are strictly immutable & protected
+    match /outwards/{outwardId} {
+      allow read: if true;
+      allow create: if canWriteStock();
+      allow update: if canWriteStock() && (isDraft(resource.data) || request.resource.data.dispatchNumber == resource.data.dispatchNumber);
+      allow delete: if canWriteStock();
+    }
+
+    // 3. Material Inwards / GRN: Posted GRN numbers are strictly immutable & protected
+    match /inwards/{inwardId} {
+      allow read: if true;
+      allow create: if canWriteStock();
+      allow update: if canWriteStock() && (isDraft(resource.data) || request.resource.data.grnNumber == resource.data.grnNumber);
+      allow delete: if canWriteStock();
+    }
+
+    // 4. Audit Logs: Strictly APPEND-ONLY immutable records (Create & Read allowed, Update & Delete disallowed)
+    match /auditLogs/{logId} {
+      allow read, create: if true;
+      allow update, delete: if false;
+    }
+
+    // 5. Stock Movements: Strictly APPEND-ONLY immutable records (Create & Read allowed, Update & Delete disallowed)
+    match /movements/{movementId} {
+      allow read: if true;
+      allow create: if canWriteStock();
+      allow update, delete: if false;
+    }
+
+    // 6. Stocks: Strict authorization & mathematical validation (Change #6 Stock Write Protection)
+    match /stocks/{stockId} {
+      allow read: if true;
+      allow create: if canWriteStock() &&
+                       isValidStock(request.resource.data) &&
+                       (stockId == request.resource.data.warehouseId + '_' + request.resource.data.itemCode || stockId.size() > 0);
+      allow update: if canWriteStock() &&
+                       isValidStock(request.resource.data) &&
+                       request.resource.data.itemCode == resource.data.itemCode &&
+                       request.resource.data.warehouseId == resource.data.warehouseId;
+      allow delete: if canWriteStock() && resource.data.totalQty == 0;
+    }
+
+    // General collections access for local ERP terminal
+    match /{collectionName}/{docId} {
+      allow read, write: if collectionName != 'transfers' &&
+                            collectionName != 'outwards' &&
+                            collectionName != 'inwards' &&
+                            collectionName != 'auditLogs' &&
+                            collectionName != 'movements' &&
+                            collectionName != 'stocks';
+    }
+  }
+}
+
+

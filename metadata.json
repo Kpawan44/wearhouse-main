@@ -1,0 +1,8 @@
+{
+  "name": "Remix: Stockflow Apex",
+  "description": "Enterprise cloud-synchronized stock and warehouse management system with real-time audit trails.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

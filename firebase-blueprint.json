@@ -1,0 +1,326 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "User account information and role",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["Super Admin", "Warehouse Manager", "Store Operator", "Viewer"] },
+        "warehouseId": { "type": "string" }
+      },
+      "required": ["uid", "name", "email", "role"]
+    },
+    "Warehouse": {
+      "title": "Warehouse Master",
+      "description": "Physical warehouse locations",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "name": { "type": "string" },
+        "address": { "type": "string" },
+        "city": { "type": "string" },
+        "state": { "type": "string" },
+        "contactPerson": { "type": "string" },
+        "phone": { "type": "string" },
+        "status": { "type": "string", "enum": ["Active", "Inactive"] }
+      },
+      "required": ["code", "name", "status"]
+    },
+    "Product": {
+      "title": "Product Master",
+      "description": "Catalog of items managed in inventory",
+      "type": "object",
+      "properties": {
+        "itemCode": { "type": "string" },
+        "barcode": { "type": "string" },
+        "qrCode": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "brand": { "type": "string" },
+        "unit": { "type": "string" },
+        "hsnCode": { "type": "string" },
+        "gst": { "type": "number" },
+        "purchaseRate": { "type": "number" },
+        "sellingRate": { "type": "number" },
+        "minStock": { "type": "number" },
+        "maxStock": { "type": "number" },
+        "weight": { "type": "number" },
+        "image": { "type": "string" },
+        "openingStock": { "type": "number" },
+        "openingWarehouseId": { "type": "string" }
+      },
+      "required": ["itemCode", "name", "purchaseRate", "sellingRate"]
+    },
+    "Supplier": {
+      "title": "Supplier Master",
+      "description": "Information about product vendors",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "gstNumber": { "type": "string" },
+        "panNumber": { "type": "string" },
+        "address": { "type": "string" },
+        "contactPerson": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" }
+      },
+      "required": ["id", "name"]
+    },
+    "Customer": {
+      "title": "Customer Master",
+      "description": "Information about dispatch destinations/clients",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "gstNumber": { "type": "string" },
+        "address": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" }
+      },
+      "required": ["id", "name"]
+    },
+    "Stock": {
+      "title": "Stock Information",
+      "description": "Warehouse-specific product levels",
+      "type": "object",
+      "properties": {
+        "itemCode": { "type": "string" },
+        "barcode": { "type": "string" },
+        "itemName": { "type": "string" },
+        "warehouseId": { "type": "string" },
+        "warehouseName": { "type": "string" },
+        "availableQty": { "type": "number" },
+        "reservedQty": { "type": "number" },
+        "inTransitQty": { "type": "number" },
+        "damagedQty": { "type": "number" },
+        "totalQty": { "type": "number" }
+      },
+      "required": ["itemCode", "warehouseId", "availableQty", "totalQty"]
+    },
+    "StockMovement": {
+      "title": "Stock Ledger Record",
+      "description": "Immutably log transaction history",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "date": { "type": "string" },
+        "time": { "type": "string" },
+        "itemCode": { "type": "string" },
+        "itemName": { "type": "string" },
+        "warehouseId": { "type": "string" },
+        "warehouseName": { "type": "string" },
+        "fromWarehouseId": { "type": "string" },
+        "fromWarehouseName": { "type": "string" },
+        "toWarehouseId": { "type": "string" },
+        "toWarehouseName": { "type": "string" },
+        "qty": { "type": "number" },
+        "user": { "type": "string" },
+        "transactionType": { "type": "string" },
+        "referenceNumber": { "type": "string" },
+        "remarks": { "type": "string" }
+      },
+      "required": ["id", "date", "time", "itemCode", "warehouseId", "qty", "transactionType"]
+    },
+    "Transfer": {
+      "title": "Warehouse Stock Transfer",
+      "description": "Tracks stock transfers between warehouses",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "transferNumber": { "type": "string" },
+        "sourceWarehouseId": { "type": "string" },
+        "sourceWarehouseName": { "type": "string" },
+        "destWarehouseId": { "type": "string" },
+        "destWarehouseName": { "type": "string" },
+        "itemCode": { "type": "string" },
+        "itemName": { "type": "string" },
+        "qty": { "type": "number" },
+        "status": { "type": "string", "enum": ["Draft", "Pending Approval", "Approved", "Dispatched", "In Transit", "Received", "Closed"] },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "approvedBy": { "type": "string" },
+        "approvedAt": { "type": "string" },
+        "dispatchedBy": { "type": "string" },
+        "dispatchedAt": { "type": "string" },
+        "receivedBy": { "type": "string" },
+        "receivedAt": { "type": "string" },
+        "remarks": { "type": "string" }
+      },
+      "required": ["id", "transferNumber", "sourceWarehouseId", "destWarehouseId", "itemCode", "qty", "status"]
+    },
+    "Inward": {
+      "title": "Material Inward GRN",
+      "description": "Goods Receipt Notes for incoming shipments",
+      "type": "object",
+      "properties": {
+        "grnNumber": { "type": "string" },
+        "date": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "supplierName": { "type": "string" },
+        "invoiceNumber": { "type": "string" },
+        "warehouseId": { "type": "string" },
+        "warehouseName": { "type": "string" },
+        "itemCode": { "type": "string" },
+        "itemName": { "type": "string" },
+        "qty": { "type": "number" },
+        "batchNumber": { "type": "string" },
+        "expiryDate": { "type": "string" },
+        "rate": { "type": "number" },
+        "gst": { "type": "number" },
+        "remarks": { "type": "string" }
+      },
+      "required": ["grnNumber", "date", "supplierId", "warehouseId", "itemCode", "qty"]
+    },
+    "Outward": {
+      "title": "Material Outward Dispatch",
+      "description": "Records dispatched items to customers",
+      "type": "object",
+      "properties": {
+        "dispatchNumber": { "type": "string" },
+        "date": { "type": "string" },
+        "customerId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "warehouseId": { "type": "string" },
+        "warehouseName": { "type": "string" },
+        "itemCode": { "type": "string" },
+        "itemName": { "type": "string" },
+        "qty": { "type": "number" },
+        "vehicleNumber": { "type": "string" },
+        "driverName": { "type": "string" },
+        "transportName": { "type": "string" },
+        "remarks": { "type": "string" },
+        "invoiceNumber": { "type": "string" }
+      },
+      "required": ["dispatchNumber", "date", "customerId", "warehouseId", "itemCode", "qty"]
+    },
+    "Adjustment": {
+      "title": "Stock Adjustment",
+      "description": "Manual level changes by authorized staff",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "date": { "type": "string" },
+        "time": { "type": "string" },
+        "itemCode": { "type": "string" },
+        "itemName": { "type": "string" },
+        "warehouseId": { "type": "string" },
+        "warehouseName": { "type": "string" },
+        "type": { "type": "string", "enum": ["Increase", "Decrease", "Damage", "Shortage", "Excess"] },
+        "qty": { "type": "number" },
+        "reason": { "type": "string" },
+        "user": { "type": "string" },
+        "remarks": { "type": "string" }
+      },
+      "required": ["id", "date", "time", "itemCode", "warehouseId", "type", "qty", "reason", "user"]
+    },
+    "Notification": {
+      "title": "In-App Notification",
+      "description": "System alerts and events",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "type": { "type": "string" },
+        "status": { "type": "string", "enum": ["unread", "read"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "title", "message", "status", "createdAt"]
+    },
+    "AuditLog": {
+      "title": "User Activity Audit Log",
+      "description": "Secure track record of operations",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "date": { "type": "string" },
+        "time": { "type": "string" },
+        "user": { "type": "string" },
+        "action": { "type": "string" },
+        "module": { "type": "string" },
+        "details": { "type": "string" }
+      },
+      "required": ["id", "date", "time", "user", "action", "module"]
+    },
+    "IdempotencyKey": {
+      "title": "Idempotency Record",
+      "description": "Persistent record of completed business transactions to prevent duplicate processing",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "key": { "type": "string" },
+        "status": { "type": "string", "enum": ["completed", "in_flight", "failed"] },
+        "clientId": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "completedAt": { "type": "string" },
+        "errorMessage": { "type": "string" }
+      },
+      "required": ["id", "key", "status", "timestamp"]
+    }
+  },
+  "firestore": {
+    "users": {
+      "schema": "User",
+      "description": "User list with role information"
+    },
+    "warehouses": {
+      "schema": "Warehouse",
+      "description": "Warehouses Master records"
+    },
+    "products": {
+      "schema": "Product",
+      "description": "Catalog of Products Master records"
+    },
+    "suppliers": {
+      "schema": "Supplier",
+      "description": "Suppliers Master records"
+    },
+    "customers": {
+      "schema": "Customer",
+      "description": "Customers Master records"
+    },
+    "stocks": {
+      "schema": "Stock",
+      "description": "Consolidated live stock numbers per warehouse and product"
+    },
+    "movements": {
+      "schema": "StockMovement",
+      "description": "Stock ledger historical logging"
+    },
+    "transfers": {
+      "schema": "Transfer",
+      "description": "Inter-warehouse transfer logs and workflows"
+    },
+    "inwards": {
+      "schema": "Inward",
+      "description": "Material Inward documents"
+    },
+    "outwards": {
+      "schema": "Outward",
+      "description": "Material Outward documents"
+    },
+    "adjustments": {
+      "schema": "Adjustment",
+      "description": "Manual inventory stock adjustments"
+    },
+    "notifications": {
+      "schema": "Notification",
+      "description": "In-app system notifications"
+    },
+    "auditLogs": {
+      "schema": "AuditLog",
+      "description": "Secure immutable logs for security audit"
+    },
+    "idempotencyKeys": {
+      "schema": "IdempotencyKey",
+      "description": "Server-side persistent idempotency registry to prevent duplicate transactions"
+    }
+  }
+}
