@@ -16,7 +16,7 @@ import {
 import { UserRole, Warehouse } from '../types';
 import { auth, db, getDoc } from '../firebase';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc, collection, getDocs, limit, query } from 'firebase/firestore';
+import { doc, setDoc, collection, getDocs } from 'firebase/firestore';
 import stockflowLogo from '../assets/images/stockflow_logo_1783944743908.jpg';
 
 interface LoginScreenProps {
@@ -27,21 +27,7 @@ interface LoginScreenProps {
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ warehouses, authErrorMessage, onLocalLogin }) => {
   const [isSignUp, setIsSignUp] = useState<boolean>(false);
-  const [hasExistingUsers, setHasExistingUsers] = useState<boolean>(true);
   const [networkNotice, setNetworkNotice] = useState<string>('');
-
-  useEffect(() => {
-    const fetchSystemConfig = async () => {
-      try {
-        // Check if database has any existing users
-        const usersSnap = await getDocs(query(collection(db, 'users'), limit(1)));
-        setHasExistingUsers(!usersSnap.empty);
-      } catch (err) {
-        console.warn("Could not read auth settings:", err);
-      }
-    };
-    fetchSystemConfig();
-  }, []);
 
   const [username, setUsername] = useState<string>('');
   const [password, setPassword] = useState<string>('');
@@ -100,43 +86,43 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ warehouses, authErrorM
     }
 
     try {
-      // 1. Silent Firebase Auth attempt (if Email provider is enabled in Firebase Console)
-      let firebaseUid: string | null = null;
-      try {
-        if (isSignUp) {
-          const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-          firebaseUid = userCredential.user?.uid || null;
-        } else {
-          const userCredential = await signInWithEmailAndPassword(auth, email, password);
-          firebaseUid = userCredential.user?.uid || null;
-        }
-      } catch (authErr: any) {
-        // Silently capture expected sandbox/disabled provider errors without console noise
-        const isExpectedAuthError = 
-          authErr.code === 'auth/operation-not-allowed' ||
-          authErr.code === 'auth/network-request-failed' ||
-          authErr.code === 'auth/configuration-not-found' ||
-          authErr.code === 'auth/internal-error' ||
-          authErr.message?.includes('operation-not-allowed') ||
-          authErr.message?.includes('network-request-failed');
-
-        if (!isExpectedAuthError && authErr.code !== 'auth/user-not-found' && authErr.code !== 'auth/wrong-password') {
-          console.warn("Firebase Auth Notice:", authErr.code || authErr.message);
-        }
-      }
-
-      // 2. Direct Firestore Database Authentication & Profile Resolution
       const roleToAssign: UserRole = selectedRole === 'Super Admin' 
         ? 'Store Operator' 
         : selectedRole;
       const displayName = (isSignUp ? name.trim() : '') || username.trim() || 'Authorized Operator';
       const whCode = selectedWarehouseId || 'WH-MUM';
-      const safeUid = firebaseUid || `usr_${email.replace(/[^a-z0-9]/gi, '_')}`;
 
       if (isSignUp) {
-        // Save user profile to Firestore
-        await setDoc(doc(db, 'users', safeUid), {
-          uid: safeUid,
+        let userCredential;
+        try {
+          userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        } catch (authErr: any) {
+          if (authErr.code === 'auth/email-already-in-use') {
+            setError('This account already has a user profile. Please sign in instead.');
+            setIsLoading(false);
+            return;
+          }
+          throw authErr;
+        }
+
+        const firebaseUid = userCredential.user?.uid;
+        if (!firebaseUid) {
+          setError('Unable to create the user profile because Firebase authentication did not return a valid account ID. Please try again.');
+          setIsLoading(false);
+          return;
+        }
+
+        // Verify profile does not already exist
+        const existingProfileSnap = await getDoc(doc(db, 'users', firebaseUid));
+        if (existingProfileSnap.exists()) {
+          setError('This account already has a user profile. Please sign in instead.');
+          setIsLoading(false);
+          return;
+        }
+
+        // Strict new user profile write (NO merge: true)
+        await setDoc(doc(db, 'users', firebaseUid), {
+          uid: firebaseUid,
           name: displayName,
           email,
           username: username.trim(),
@@ -145,7 +131,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ warehouses, authErrorM
           status: 'Active',
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
-        }, { merge: true });
+        });
 
         // Write Security Audit Log
         const logId = `AUD-${Date.now()}-${Math.floor(Math.random() * 1000000000)}`;
@@ -164,11 +150,35 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ warehouses, authErrorM
           return;
         }
       } else {
-        // Sign In check in Firestore
-        let userDocSnap = await getDoc(doc(db, 'users', safeUid));
-        let userData = userDocSnap.exists() ? userDocSnap.data() : null;
+        // 1. Silent Firebase Auth attempt (if Email provider is enabled in Firebase Console)
+        let firebaseUid: string | null = null;
+        try {
+          const userCredential = await signInWithEmailAndPassword(auth, email, password);
+          firebaseUid = userCredential.user?.uid || null;
+        } catch (authErr: any) {
+          const isExpectedAuthError = 
+            authErr.code === 'auth/operation-not-allowed' ||
+            authErr.code === 'auth/network-request-failed' ||
+            authErr.code === 'auth/configuration-not-found' ||
+            authErr.code === 'auth/internal-error' ||
+            authErr.message?.includes('operation-not-allowed') ||
+            authErr.message?.includes('network-request-failed');
 
-        // If not found by direct ID, search users collection
+          if (!isExpectedAuthError && authErr.code !== 'auth/user-not-found' && authErr.code !== 'auth/wrong-password') {
+            console.warn("Firebase Auth Notice:", authErr.code || authErr.message);
+          }
+        }
+
+        // 2. Direct Firestore Database Authentication & Profile Lookup (READ-ONLY)
+        let userData: any = null;
+        if (firebaseUid) {
+          const userDocSnap = await getDoc(doc(db, 'users', firebaseUid));
+          if (userDocSnap.exists()) {
+            userData = userDocSnap.data();
+          }
+        }
+
+        // If not found by direct Firebase UID, lookup matching profile by email or username
         if (!userData) {
           const allUsersSnap = await getDocs(collection(db, 'users'));
           allUsersSnap.forEach((docItem) => {
