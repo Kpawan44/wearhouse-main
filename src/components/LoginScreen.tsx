@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  Shield, 
   HardHat, 
   Eye, 
   Building, 
@@ -28,23 +27,12 @@ interface LoginScreenProps {
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ warehouses, authErrorMessage, onLocalLogin }) => {
   const [isSignUp, setIsSignUp] = useState<boolean>(false);
-  const [dbAdminCode, setDbAdminCode] = useState<string>('');
   const [hasExistingUsers, setHasExistingUsers] = useState<boolean>(true);
   const [networkNotice, setNetworkNotice] = useState<string>('');
 
-  // Check if system has an invite/admin auth code and if it's initial setup
   useEffect(() => {
     const fetchSystemConfig = async () => {
       try {
-        const docRef = doc(db, 'settings', 'auth');
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          if (data && data.adminAuthCode) {
-            setDbAdminCode(data.adminAuthCode.trim());
-          }
-        }
-
         // Check if database has any existing users
         const usersSnap = await getDocs(query(collection(db, 'users'), limit(1)));
         setHasExistingUsers(!usersSnap.empty);
@@ -60,7 +48,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ warehouses, authErrorM
   const [name, setName] = useState<string>('');
   const [selectedRole, setSelectedRole] = useState<UserRole>('Store Operator');
   const [selectedWarehouseId, setSelectedWarehouseId] = useState<string>('');
-  const [adminAuthCode, setAdminAuthCode] = useState<string>('');
   const [error, setError] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
@@ -110,15 +97,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ warehouses, authErrorM
       setError('Please provide your full operator name.');
       setIsLoading(false);
       return;
-    }
-
-    // If an Admin Auth Code is configured in the system, enforce it on registration
-    if (isSignUp && dbAdminCode) {
-      if (!adminAuthCode.trim() || adminAuthCode.trim() !== dbAdminCode) {
-        setError('Admin Authorization Failed: A valid Authorization Code is required to create a new profile.');
-        setIsLoading(false);
-        return;
-      }
     }
 
     try {
@@ -496,27 +474,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ warehouses, authErrorM
                     </select>
                   </div>
                 </div>
-
-                {/* C. Admin Authorization Code (if configured by administrator) */}
-                {dbAdminCode && (
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block flex items-center justify-between">
-                      <span>Authorization Passcode</span>
-                      <span className="text-[8px] text-rose-500 font-black tracking-widest uppercase">Required</span>
-                    </label>
-                    <div className="relative">
-                      <Shield className="absolute left-3 top-2.5 w-4 h-4 text-slate-500" />
-                      <input
-                        type="password"
-                        required
-                        value={adminAuthCode}
-                        onChange={(e) => setAdminAuthCode(e.target.value)}
-                        placeholder="Enter Authorization Passcode"
-                        className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-9 pr-3 py-2 text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none text-slate-200 font-semibold"
-                      />
-                    </div>
-                  </div>
-                )}
               </div>
             )}
 
