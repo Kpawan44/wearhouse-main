@@ -45,6 +45,27 @@ service cloud.firestore {
       return ('status' in data && data.status == 'Draft');
     }
 
+    // Helper to validate Transfer document updates (Change #11: Posted number immutability & prevent Posted -> Draft)
+    function isValidTransferUpdate() {
+      return (isDraft(resource.data) && request.resource.data.status == 'Draft') ||
+             (request.resource.data.status != 'Draft' &&
+              request.resource.data.transferNumber == resource.data.transferNumber);
+    }
+
+    // Helper to validate Outward / Dispatch document updates (Change #11: Posted number immutability & prevent Posted -> Draft)
+    function isValidOutwardUpdate() {
+      return (isDraft(resource.data) && request.resource.data.status == 'Draft') ||
+             (request.resource.data.status != 'Draft' &&
+              request.resource.data.dispatchNumber == resource.data.dispatchNumber);
+    }
+
+    // Helper to validate Inward / GRN document updates (Change #11: Posted number immutability & prevent Posted -> Draft)
+    function isValidInwardUpdate() {
+      return (isDraft(resource.data) && request.resource.data.status == 'Draft') ||
+             (request.resource.data.status != 'Draft' &&
+              request.resource.data.grnNumber == resource.data.grnNumber);
+    }
+
     // Helper to validate Stock document structure and inventory non-negativity
     function isValidStock(data) {
       return data.itemCode is string && data.itemCode.size() > 0 &&
@@ -57,27 +78,27 @@ service cloud.firestore {
              data.totalQty == (data.availableQty + data.reservedQty + data.inTransitQty + data.damagedQty);
     }
 
-    // 1. Stock Transfers: Posted transfer numbers are strictly immutable & protected
+    // 1. Stock Transfers: Posted transfer numbers are strictly immutable & protected (Change #11)
     match /transfers/{transferId} {
       allow read: if true;
       allow create: if canWriteStock();
-      allow update: if canWriteStock() && (isDraft(resource.data) || request.resource.data.transferNumber == resource.data.transferNumber);
+      allow update: if canWriteStock() && isValidTransferUpdate();
       allow delete: if canWriteStock();
     }
 
-    // 2. Customer Dispatches / Outward: Posted dispatch numbers are strictly immutable & protected
+    // 2. Customer Dispatches / Outward: Posted dispatch numbers are strictly immutable & protected (Change #11)
     match /outwards/{outwardId} {
       allow read: if true;
       allow create: if canWriteStock();
-      allow update: if canWriteStock() && (isDraft(resource.data) || request.resource.data.dispatchNumber == resource.data.dispatchNumber);
+      allow update: if canWriteStock() && isValidOutwardUpdate();
       allow delete: if canWriteStock();
     }
 
-    // 3. Material Inwards / GRN: Posted GRN numbers are strictly immutable & protected
+    // 3. Material Inwards / GRN: Posted GRN numbers are strictly immutable & protected (Change #11)
     match /inwards/{inwardId} {
       allow read: if true;
       allow create: if canWriteStock();
-      allow update: if canWriteStock() && (isDraft(resource.data) || request.resource.data.grnNumber == resource.data.grnNumber);
+      allow update: if canWriteStock() && isValidInwardUpdate();
       allow delete: if canWriteStock();
     }
 
