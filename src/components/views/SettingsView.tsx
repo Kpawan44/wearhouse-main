@@ -82,8 +82,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       setIsSaving(true);
       setUserActionSuccess('');
       setUserActionError('');
+      const targetUser = users.find(u => u.uid === uid);
+      const finalRole: UserRole = targetUser?.email?.toLowerCase() === 'chinarsales737@gmail.com'
+        ? 'Super Admin'
+        : (editingRole === 'Super Admin' ? 'Store Operator' : editingRole);
+
       if (onUpdateUser) {
-        await onUpdateUser(uid, editingName.trim(), editingRole, editingWarehouseId, editingPhone.trim(), editingStatus);
+        await onUpdateUser(uid, editingName.trim(), finalRole, editingWarehouseId, editingPhone.trim(), editingStatus);
         setUserActionSuccess(`Successfully updated profile details for operator "${editingName}".`);
         setEditingUserId('');
       } else {
@@ -639,16 +644,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                               )}
                             </td>
                             <td className="py-3.5">
-                              {isEditing ? (
-                                <select
-                                  value={editingRole}
-                                  onChange={(e) => setEditingRole(e.target.value as UserRole)}
-                                  className="bg-white border border-gray-200 rounded px-2.5 py-1.5 text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none font-semibold text-slate-800"
-                                >
-                                  <option value="Super Admin">Super Admin</option>
-                                  <option value="Store Operator">Store Operator</option>
-                                  <option value="Viewer">Viewer</option>
-                                </select>
+                                {isEditing ? (
+                                  <select
+                                    value={editingRole}
+                                    onChange={(e) => setEditingRole(e.target.value as UserRole)}
+                                    className="bg-white border border-gray-200 rounded px-2.5 py-1.5 text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none font-semibold text-slate-800"
+                                  >
+                                    {user.email?.toLowerCase() === 'chinarsales737@gmail.com' ? (
+                                      <option value="Super Admin">Super Admin (Primary)</option>
+                                    ) : (
+                                      <>
+                                        <option value="Store Operator">Store Operator</option>
+                                        <option value="Viewer">Viewer</option>
+                                      </>
+                                    )}
+                                  </select>
                               ) : (
                                 <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wide ${
                                   user.role === 'Super Admin' 

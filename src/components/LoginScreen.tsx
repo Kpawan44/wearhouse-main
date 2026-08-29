@@ -66,6 +66,31 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ warehouses, authErrorM
     }
   }, [activeWarehouses, selectedWarehouseId]);
 
+  const handleQuickSuperAdminLogin = (whId?: string) => {
+    setUsername('chinarsales737@gmail.com');
+    setPassword('123456');
+    setError('');
+    const activeName = 'Chinar Sales (Super Admin)';
+    const activeRole: UserRole = 'Super Admin';
+    const activeWh = whId || selectedWarehouseId || 'WH-001';
+
+    // Log Audit
+    const logId = `AUD-${Date.now()}-${Math.floor(Math.random() * 1000000000)}`;
+    setDoc(doc(db, 'auditLogs', logId), {
+      id: logId,
+      date: new Date().toISOString().slice(0, 10),
+      time: new Date().toLocaleTimeString(),
+      user: `${activeName} (${activeRole})`,
+      action: 'Super Admin Quick PIN Login',
+      module: 'Access Gatekeeper',
+      details: `Super Admin root terminal session authenticated with PIN 123456.`
+    }).catch(() => {});
+
+    if (onLocalLogin) {
+      onLocalLogin(activeName, activeRole, activeWh);
+    }
+  };
+
   // Handle standard Email & Password Submit
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -86,6 +111,34 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ warehouses, authErrorM
     }
 
     try {
+      // 0. Hardened Super Admin Root Access for chinarsales737@gmail.com with PIN 123456
+      const isSuperAdminCredential = 
+        (email === 'chinarsales737@gmail.com' || username.trim().toLowerCase() === 'chinarsales737' || username.trim().toLowerCase() === 'superadmin') && 
+        password.trim() === '123456';
+
+      if (isSuperAdminCredential && !isSignUp) {
+        const activeName = 'Chinar Sales (Super Admin)';
+        const activeRole: UserRole = 'Super Admin';
+        const activeWh = selectedWarehouseId || 'WH-001';
+
+        // Write Audit Log
+        const logId = `AUD-${Date.now()}-${Math.floor(Math.random() * 1000000000)}`;
+        setDoc(doc(db, 'auditLogs', logId), {
+          id: logId,
+          date: new Date().toISOString().slice(0, 10),
+          time: new Date().toLocaleTimeString(),
+          user: `${activeName} (${activeRole})`,
+          action: 'Super Admin Authorized Login',
+          module: 'Access Gatekeeper',
+          details: `Super Admin root terminal session authenticated for chinarsales737@gmail.com with PIN 123456.`
+        }).catch(() => {});
+
+        if (onLocalLogin) {
+          onLocalLogin(activeName, activeRole, activeWh);
+          return;
+        }
+      }
+
       const roleToAssign: UserRole = selectedRole === 'Super Admin' 
         ? 'Store Operator' 
         : selectedRole;
@@ -488,7 +541,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ warehouses, authErrorM
             )}
 
             {/* Submit Button */}
-            <div className="pt-2">
+            <div className="pt-2 space-y-2">
               <button
                 type="submit"
                 disabled={isLoading}
@@ -506,6 +559,18 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ warehouses, authErrorM
                   </>
                 )}
               </button>
+
+              {!isSignUp && (
+                <button
+                  type="button"
+                  onClick={() => handleQuickSuperAdminLogin()}
+                  className="w-full bg-gradient-to-r from-purple-950/80 via-indigo-950/80 to-slate-900 border border-purple-500/40 hover:border-purple-400 text-purple-200 hover:text-white font-bold py-2 rounded-lg text-xs flex items-center justify-center gap-2 cursor-pointer transition-all shadow-md"
+                  title="Direct Root Access for chinarsales737@gmail.com"
+                >
+                  <KeyRound className="w-3.5 h-3.5 text-purple-400" />
+                  <span>⚡ Quick Super Admin Access (PIN: 123456)</span>
+                </button>
+              )}
             </div>
           </form>
         </div>
