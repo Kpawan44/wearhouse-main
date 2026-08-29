@@ -52,6 +52,7 @@ import {
   deleteInwardAtomic,
   deleteOutwardAtomic,
   deleteTransferAtomic,
+  editOutwardGroupAtomic,
   reverseMovementAtomic,
   getStockDocId
 } from './utils/atomicStockTransactions';
@@ -1614,19 +1615,26 @@ export default function App() {
     });
   };
 
-  // 4.1 EDIT CUSTOMER DISPATCH VOUCHER
+  // 4.1 EDIT CUSTOMER DISPATCH VOUCHER & ITEMS
   const handleEditOutwardGroup = async (
     dispatchNumber: string,
     updatedVoucher: {
       date: string;
       customerId: string;
       customerName: string;
+      warehouseId: string;
+      warehouseName: string;
       vehicleNumber: string;
       driverName: string;
       transportName: string;
       remarks: string;
       invoiceNumber?: string;
-    }
+    },
+    updatedItems: Array<{
+      itemCode: string;
+      itemName: string;
+      qty: number;
+    }>
   ) => {
     if (currentRole === 'Viewer') {
       alert('Access Denied: Users with the Viewer role are not authorized to edit customer dispatch vouchers.');
@@ -1634,44 +1642,33 @@ export default function App() {
     }
 
     try {
-      const matchingOutwards = outwards.filter(o => o.dispatchNumber === dispatchNumber);
-      if (matchingOutwards.length === 0) {
-        alert(`Dispatch order ${dispatchNumber} not found.`);
-        return;
-      }
-
       if (isOnline) {
-        const batch = writeBatch(db);
-        matchingOutwards.forEach(out => {
-          if (out.id) {
-            const docRef = doc(db, 'outwards', out.id);
-            batch.update(docRef, {
-              date: updatedVoucher.date,
-              customerId: updatedVoucher.customerId,
-              customerName: updatedVoucher.customerName,
-              vehicleNumber: updatedVoucher.vehicleNumber || 'N/A',
-              driverName: updatedVoucher.driverName || 'N/A',
-              transportName: updatedVoucher.transportName || 'N/A',
-              remarks: updatedVoucher.remarks || 'Customer order dispatch.',
-              invoiceNumber: updatedVoucher.invoiceNumber || 'N/A',
-              updatedAt: new Date().toISOString(),
-              updatedBy: `${currentRole} (${currentUserName || 'Admin'})`
-            });
-          }
+        const barcodesMap: Record<string, string> = {};
+        for (const p of products) {
+          barcodesMap[p.itemCode] = p.barcode;
+        }
+
+        await editOutwardGroupAtomic(db, {
+          dispatchNumber,
+          updatedVoucher,
+          updatedItems,
+          role: currentRole,
+          user: `${currentUserName || currentRole}`,
+          productBarcodes: barcodesMap
         });
 
-        await batch.commit();
+        await reconcileStockBalances();
       }
 
       await logAudit(
         'Edit Customer Dispatch Voucher',
         'Material Outward',
-        `Edited voucher details for Dispatch ${dispatchNumber} (Customer: ${updatedVoucher.customerName}, Inv: ${updatedVoucher.invoiceNumber || 'N/A'}, Vehicle: ${updatedVoucher.vehicleNumber || 'N/A'}).`
+        `Edited Dispatch ${dispatchNumber}: ${updatedItems.length} line items (Client: ${updatedVoucher.customerName}, Inv: ${updatedVoucher.invoiceNumber || 'N/A'}, Vehicle: ${updatedVoucher.vehicleNumber || 'N/A'}).`
       );
 
       await sendNotification(
         'Customer Dispatch Voucher Updated',
-        `Dispatch Voucher ${dispatchNumber} details were updated by ${currentUserName || currentRole}.`,
+        `Dispatch Voucher ${dispatchNumber} items and details were updated by ${currentUserName || currentRole}.`,
         'transaction'
       );
     } catch (err: any) {

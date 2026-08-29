@@ -18,12 +18,19 @@ interface CustomerDispatchViewProps {
       date: string;
       customerId: string;
       customerName: string;
+      warehouseId: string;
+      warehouseName: string;
       vehicleNumber: string;
       driverName: string;
       transportName: string;
       remarks: string;
       invoiceNumber?: string;
-    }
+    },
+    updatedItems: Array<{
+      itemCode: string;
+      itemName: string;
+      qty: number;
+    }>
   ) => Promise<void>;
   onDeleteOutward: (id: string) => Promise<void>;
   onRearrangeSeries?: () => Promise<any>;
@@ -100,6 +107,7 @@ export const CustomerDispatchView: React.FC<CustomerDispatchViewProps> = ({
   const [editTransportName, setEditTransportName] = useState('');
   const [editRemarks, setEditRemarks] = useState('');
   const [editInvoiceNumber, setEditInvoiceNumber] = useState('');
+  const [editItems, setEditItems] = useState<Array<{ itemCode: string; qty: number | string }>>([]);
   const [editError, setEditError] = useState('');
   const [isSubmittingEdit, setIsSubmittingEdit] = useState(false);
 
@@ -112,8 +120,30 @@ export const CustomerDispatchView: React.FC<CustomerDispatchViewProps> = ({
     setEditTransportName(disp.transportName && disp.transportName !== 'N/A' ? disp.transportName : '');
     setEditRemarks(disp.remarks || '');
     setEditInvoiceNumber(disp.invoiceNumber && disp.invoiceNumber !== 'N/A' ? disp.invoiceNumber : '');
+    setEditItems(disp.items.map(it => ({ itemCode: it.itemCode, qty: it.qty })));
     setEditError('');
     setIsEditModalOpen(true);
+  };
+
+  const addEditItemRow = () => {
+    setEditItems([...editItems, { itemCode: products[0]?.itemCode || '', qty: 1 }]);
+  };
+
+  const removeEditItemRow = (index: number) => {
+    if (editItems.length > 1) {
+      setEditItems(editItems.filter((_, idx) => idx !== index));
+    }
+  };
+
+  const updateEditItemRow = (index: number, field: 'itemCode' | 'qty', value: any) => {
+    const updated = [...editItems];
+    if (field === 'qty') {
+      const sanitized = typeof value === 'string' ? value.replace(/[^0-9.]/g, '') : value;
+      updated[index].qty = sanitized;
+    } else {
+      updated[index].itemCode = value;
+    }
+    setEditItems(updated);
   };
 
   const handleSaveEditVoucher = async (e: React.FormEvent) => {
@@ -132,19 +162,77 @@ export const CustomerDispatchView: React.FC<CustomerDispatchViewProps> = ({
       return;
     }
 
+    if (!editItems || editItems.length === 0) {
+      setEditError('Dispatch voucher must contain at least one line item.');
+      return;
+    }
+
+    // Validate Items
+    const parsedItems: Array<{ itemCode: string; itemName: string; qty: number }> = [];
+    const aggregateQtyMap: { [code: string]: number } = {};
+
+    for (let i = 0; i < editItems.length; i++) {
+      const row = editItems[i];
+      if (!row.itemCode) {
+        setEditError(`Row #${i + 1}: Please select a product SKU.`);
+        return;
+      }
+      const numQty = typeof row.qty === 'number' ? row.qty : (parseFloat(row.qty) || 0);
+      if (numQty <= 0) {
+        setEditError(`Row #${i + 1}: Quantity must be greater than zero.`);
+        return;
+      }
+      const prod = products.find(p => p.itemCode === row.itemCode);
+      if (!prod) {
+        setEditError(`Row #${i + 1}: Product SKU "${row.itemCode}" was not found.`);
+        return;
+      }
+      parsedItems.push({
+        itemCode: row.itemCode,
+        itemName: prod.name,
+        qty: numQty
+      });
+      aggregateQtyMap[row.itemCode] = (aggregateQtyMap[row.itemCode] || 0) + numQty;
+    }
+
+    // Inventory Check: Check available stock + original dispatched quantity
+    const origQtyMap: { [code: string]: number } = {};
+    editingDispatch.items.forEach(it => {
+      origQtyMap[it.itemCode] = (origQtyMap[it.itemCode] || 0) + it.qty;
+    });
+
+    for (const [code, reqQty] of Object.entries(aggregateQtyMap)) {
+      const prod = products.find(p => p.itemCode === code)!;
+      const sourceStock = stocks.find(s => s.itemCode === code && s.warehouseId === editingDispatch.warehouseId);
+      const currentAvailable = sourceStock ? getLiveAvailableQty(sourceStock, warehouses) : 0;
+      const prevDispatchedForThis = origQtyMap[code] || 0;
+      const maxPossible = currentAvailable + prevDispatchedForThis;
+
+      if (reqQty > maxPossible) {
+        setEditError(`STOCK LIMIT EXCEEDED: Cannot dispatch ${reqQty} Pcs of "${prod.name}" (${code}). Maximum available in ${editingDispatch.warehouseName} is ${maxPossible} Pcs (Current Available: ${currentAvailable} + Current Voucher: ${prevDispatchedForThis}).`);
+        return;
+      }
+    }
+
     setIsSubmittingEdit(true);
     try {
-      await onEditOutward(editingDispatch.dispatchNumber, {
-        date: editDate,
-        customerId: editCustomerId,
-        customerName: selectedCust.name,
-        vehicleNumber: editVehicleNumber.trim() || 'N/A',
-        driverName: editDriverName.trim() || 'N/A',
-        transportName: editTransportName.trim() || 'N/A',
-        remarks: editRemarks.trim() || 'Customer order dispatch.',
-        invoiceNumber: editInvoiceNumber.trim() || 'N/A',
-      });
-      setFormSuccess(`Dispatch voucher ${editingDispatch.dispatchNumber} updated successfully!`);
+      await onEditOutward(
+        editingDispatch.dispatchNumber,
+        {
+          date: editDate,
+          customerId: editCustomerId,
+          customerName: selectedCust.name,
+          warehouseId: editingDispatch.warehouseId,
+          warehouseName: editingDispatch.warehouseName,
+          vehicleNumber: editVehicleNumber.trim() || 'N/A',
+          driverName: editDriverName.trim() || 'N/A',
+          transportName: editTransportName.trim() || 'N/A',
+          remarks: editRemarks.trim() || 'Customer order dispatch.',
+          invoiceNumber: editInvoiceNumber.trim() || 'N/A',
+        },
+        parsedItems
+      );
+      setFormSuccess(`Dispatch voucher ${editingDispatch.dispatchNumber} updated successfully with ${parsedItems.length} item(s)!`);
       setIsEditModalOpen(false);
       setEditingDispatch(null);
     } catch (err: any) {
@@ -1100,21 +1188,92 @@ export const CustomerDispatchView: React.FC<CustomerDispatchViewProps> = ({
                   </div>
                 </div>
 
-                {/* Line Items Preview */}
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Dispatched Line Items ({editingDispatch.items.length})</label>
-                  <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 max-h-36 overflow-y-auto space-y-1.5">
-                    {editingDispatch.items.map((it, idx) => (
-                      <div key={idx} className="flex items-center justify-between text-xs border-b border-dashed border-slate-200 last:border-0 pb-1 last:pb-0">
-                        <div className="flex flex-col">
-                          <span className="font-semibold text-slate-800">{it.itemName}</span>
-                          <span className="text-[9px] text-gray-400 font-mono">{it.itemCode}</span>
+                {/* Editable Line Items Section */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">
+                      Dispatched Products & Line Items ({editItems.length}) *
+                    </label>
+                    <button
+                      type="button"
+                      onClick={addEditItemRow}
+                      className="text-xs text-indigo-600 hover:text-indigo-700 font-bold flex items-center gap-1 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded cursor-pointer transition-colors shadow-2xs"
+                    >
+                      <Plus className="w-3 h-3" /> Add Item
+                    </button>
+                  </div>
+
+                  <div className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
+                    {editItems.map((row, idx) => {
+                      const sourceStock = stocks.find(s => s.itemCode === row.itemCode && s.warehouseId === editingDispatch.warehouseId);
+                      const currentAvailable = sourceStock ? getLiveAvailableQty(sourceStock, warehouses) : 0;
+                      const origItem = editingDispatch.items.find(i => i.itemCode === row.itemCode);
+                      const origQty = origItem ? origItem.qty : 0;
+                      const totalAvailable = currentAvailable + origQty;
+
+                      return (
+                        <div key={idx} className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex flex-col sm:flex-row sm:items-end gap-3">
+                          <div className="flex-1 space-y-1">
+                            <label className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">
+                              Product SKU / Name #{idx + 1}
+                            </label>
+                            <select
+                              required
+                              value={row.itemCode}
+                              onChange={(e) => updateEditItemRow(idx, 'itemCode', e.target.value)}
+                              className="w-full bg-white border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none font-semibold text-gray-800"
+                            >
+                              <option value="">-- Select Product --</option>
+                              {products.map(p => (
+                                <option key={p.itemCode} value={p.itemCode}>
+                                  {p.name} ({p.itemCode})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="w-28 space-y-1">
+                            <label className="text-[9px] font-bold text-gray-400 uppercase tracking-wider flex items-center justify-between">
+                              <span>Qty</span>
+                              {Number(row.qty) > totalAvailable && (
+                                <span className="text-[8px] text-rose-600 font-extrabold animate-pulse">Exceeds!</span>
+                              )}
+                            </label>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              required
+                              value={row.qty}
+                              onChange={(e) => updateEditItemRow(idx, 'qty', e.target.value)}
+                              className={`w-full bg-white border rounded-lg px-2.5 py-1.5 text-xs focus:ring-1 focus:outline-none font-bold ${
+                                Number(row.qty) > totalAvailable
+                                  ? 'border-rose-400 focus:ring-rose-500 bg-rose-50/50 text-rose-800'
+                                  : 'border-gray-200 focus:ring-indigo-500 text-gray-800'
+                              }`}
+                              placeholder="Qty"
+                            />
+                          </div>
+
+                          <div className="text-right text-[10px] font-mono text-gray-500 pb-1 flex-col justify-end min-w-[90px]">
+                            <div className="text-slate-400 text-[9px]">Avail + Voucher:</div>
+                            <div className={`font-extrabold ${totalAvailable === 0 ? 'text-rose-600' : Number(row.qty) > totalAvailable ? 'text-amber-600 font-black' : 'text-slate-800'}`}>
+                              {totalAvailable} Pcs
+                            </div>
+                          </div>
+
+                          {editItems.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => removeEditItemRow(idx)}
+                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer self-center sm:self-end mb-0.5"
+                              title="Remove item row"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
-                        <span className="font-mono text-rose-600 font-bold bg-rose-50 px-2 py-0.5 rounded border border-rose-200 text-xs">
-                          -{it.qty} Units
-                        </span>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
 

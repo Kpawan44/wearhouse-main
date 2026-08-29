@@ -14,7 +14,10 @@ import {
   collection,
   runTransaction,
   serverTimestamp,
-  DocumentReference
+  DocumentReference,
+  query,
+  where,
+  getDocs
 } from 'firebase/firestore';
 import { Inward, Outward, Transfer, StockMovement, Stock, Product, UserRole } from '../types';
 
@@ -1213,6 +1216,215 @@ export async function deleteOutwardAtomic(
     transaction.set(reversalMvtRef, reversalMvtData);
 
     return { success: true, dispatchNumber: outward.dispatchNumber };
+  });
+}
+
+// ============================================================================
+// 9.1 ATOMIC EDIT OUTWARD DISPATCH GROUP (HEADER & ITEMS)
+// Writes: Updated/Replaced Outward Docs + Adjusted Stock Docs + Movement Ledger Docs
+// ============================================================================
+export async function editOutwardGroupAtomic(
+  db: Firestore,
+  params: {
+    dispatchNumber: string;
+    updatedVoucher: {
+      date: string;
+      customerId: string;
+      customerName: string;
+      warehouseId: string;
+      warehouseName: string;
+      vehicleNumber: string;
+      driverName: string;
+      transportName: string;
+      remarks: string;
+      invoiceNumber?: string;
+    };
+    updatedItems: Array<{
+      itemCode: string;
+      itemName: string;
+      qty: number;
+    }>;
+    role: UserRole;
+    user?: string;
+    productBarcodes?: Record<string, string>;
+  }
+): Promise<{ success: boolean; dispatchNumber: string; updatedItemCount: number }> {
+  const { dispatchNumber, updatedVoucher, updatedItems, role, user = 'Super Admin', productBarcodes = {} } = params;
+  assertCanWriteStock(role, 'edit Outward Customer Dispatches');
+
+  if (!updatedItems || updatedItems.length === 0) {
+    throw new Error('Customer dispatch voucher must contain at least one line item.');
+  }
+
+  // Find all existing outwards matching this dispatchNumber
+  const outwardsQuery = query(collection(db, 'outwards'), where('dispatchNumber', '==', dispatchNumber));
+  const existingOutwardsSnap = await getDocs(outwardsQuery);
+  if (existingOutwardsSnap.empty) {
+    throw new Error(`No customer dispatch records found for dispatch number "${dispatchNumber}".`);
+  }
+
+  const existingOutwards: Array<{ id: string; data: Outward }> = existingOutwardsSnap.docs.map(d => ({
+    id: d.id,
+    data: d.data() as Outward
+  }));
+
+  const warehouseId = updatedVoucher.warehouseId || existingOutwards[0].data.warehouseId;
+  const warehouseName = updatedVoucher.warehouseName || existingOutwards[0].data.warehouseName;
+
+  // Collect all unique item codes across existing and updated items
+  const allItemCodes = new Set<string>();
+  existingOutwards.forEach(o => allItemCodes.add(o.data.itemCode));
+  updatedItems.forEach(i => allItemCodes.add(i.itemCode));
+
+  const stockDocRefs: Record<string, DocumentReference> = {};
+  for (const code of allItemCodes) {
+    stockDocRefs[code] = doc(db, 'stocks', getStockDocId(warehouseId, code));
+  }
+
+  return await runTransaction(db, async (transaction) => {
+    // 1. ALL READS FIRST
+    const stockSnaps: Record<string, Stock | null> = {};
+    for (const [code, ref] of Object.entries(stockDocRefs)) {
+      const sSnap = await transaction.get(ref);
+      stockSnaps[code] = sSnap.exists() ? (sSnap.data() as Stock) : null;
+    }
+
+    // 2. IN-MEMORY COMPUTATION OF NET STOCK DELTAS
+    const oldQtyMap: Record<string, number> = {};
+    existingOutwards.forEach(o => {
+      oldQtyMap[o.data.itemCode] = (oldQtyMap[o.data.itemCode] || 0) + o.data.qty;
+    });
+
+    const newQtyMap: Record<string, number> = {};
+    updatedItems.forEach(i => {
+      newQtyMap[i.itemCode] = (newQtyMap[i.itemCode] || 0) + i.qty;
+    });
+
+    const now = new Date();
+    const dateStr = updatedVoucher.date || now.toISOString().slice(0, 10);
+    const timeStr = now.toLocaleTimeString();
+
+    const stockWrites: Array<{ ref: DocumentReference; data: Partial<Stock> }> = [];
+    const movementWrites: Array<{ ref: DocumentReference; data: Omit<StockMovement, 'id'> }> = [];
+
+    for (const code of allItemCodes) {
+      const oldQty = oldQtyMap[code] || 0;
+      const newQty = newQtyMap[code] || 0;
+      const netDelta = oldQty - newQty; // Positive = add back stock; Negative = deduct more stock
+
+      const existingStock = stockSnaps[code];
+      const prodName = updatedItems.find(i => i.itemCode === code)?.itemName || existingOutwards.find(o => o.data.itemCode === code)?.data.itemName || `Item ${code}`;
+      const barcode = productBarcodes[code] || `BAR-${code}`;
+
+      if (netDelta !== 0) {
+        const updatedStock = calculateUpdatedStock(
+          existingStock,
+          warehouseId,
+          warehouseName,
+          code,
+          prodName,
+          barcode,
+          'availableQty',
+          netDelta
+        );
+
+        if ((updatedStock.availableQty || 0) < 0) {
+          throw new Error(`NEGATIVE SALES BLOCK: Editing dispatch ${dispatchNumber} for product "${prodName}" (${code}) would cause negative stock balance (${updatedStock.availableQty} Pcs) in ${warehouseName}.`);
+        }
+
+        stockWrites.push({ ref: stockDocRefs[code], data: updatedStock });
+
+        // Record adjustment movement in immutable ledger
+        const mvtRef = doc(collection(db, 'movements'));
+        movementWrites.push({
+          ref: mvtRef,
+          data: {
+            date: dateStr,
+            time: timeStr,
+            itemCode: code,
+            itemName: prodName,
+            warehouseId,
+            warehouseName,
+            qty: -netDelta,
+            transactionType: 'Outward (Dispatch)',
+            referenceNumber: dispatchNumber,
+            user,
+            remarks: `[Voucher Edit] Dispatch ${dispatchNumber} item adjustment (Old Qty: ${oldQty}, New Qty: ${newQty}, Diff: ${-netDelta} Pcs). Inv: ${updatedVoucher.invoiceNumber || 'N/A'}.`
+          }
+        });
+      }
+    }
+
+    // 3. OUTWARD DOCUMENT SYNCHRONIZATION
+    const minLen = Math.min(existingOutwards.length, updatedItems.length);
+
+    for (let i = 0; i < minLen; i++) {
+      const outRef = doc(db, 'outwards', existingOutwards[i].id);
+      const item = updatedItems[i];
+      transaction.update(outRef, {
+        dispatchNumber,
+        date: dateStr,
+        customerId: updatedVoucher.customerId,
+        customerName: updatedVoucher.customerName,
+        warehouseId,
+        warehouseName,
+        itemCode: item.itemCode,
+        itemName: item.itemName,
+        qty: item.qty,
+        vehicleNumber: updatedVoucher.vehicleNumber || 'N/A',
+        driverName: updatedVoucher.driverName || 'N/A',
+        transportName: updatedVoucher.transportName || 'N/A',
+        remarks: updatedVoucher.remarks || 'Customer order dispatch.',
+        invoiceNumber: updatedVoucher.invoiceNumber || 'N/A',
+        updatedAt: now.toISOString(),
+        updatedBy: user
+      });
+    }
+
+    // Delete extra outward docs if new item list is shorter
+    if (existingOutwards.length > updatedItems.length) {
+      for (let i = minLen; i < existingOutwards.length; i++) {
+        const outRef = doc(db, 'outwards', existingOutwards[i].id);
+        transaction.delete(outRef);
+      }
+    }
+
+    // Create new outward docs if new item list is longer
+    if (updatedItems.length > existingOutwards.length) {
+      for (let i = minLen; i < updatedItems.length; i++) {
+        const outRef = doc(collection(db, 'outwards'));
+        const item = updatedItems[i];
+        transaction.set(outRef, {
+          dispatchNumber,
+          date: dateStr,
+          customerId: updatedVoucher.customerId,
+          customerName: updatedVoucher.customerName,
+          warehouseId,
+          warehouseName,
+          itemCode: item.itemCode,
+          itemName: item.itemName,
+          qty: item.qty,
+          vehicleNumber: updatedVoucher.vehicleNumber || 'N/A',
+          driverName: updatedVoucher.driverName || 'N/A',
+          transportName: updatedVoucher.transportName || 'N/A',
+          remarks: updatedVoucher.remarks || 'Customer order dispatch.',
+          invoiceNumber: updatedVoucher.invoiceNumber || 'N/A',
+          createdAt: now.toISOString(),
+          updatedAt: now.toISOString(),
+          updatedBy: user
+        });
+      }
+    }
+
+    // 4. WRITE STOCKS & MOVEMENTS
+    for (const sw of stockWrites) {
+      transaction.set(sw.ref, sw.data, { merge: true });
+    }
+    for (const mw of movementWrites) {
+      transaction.set(mw.ref, mw.data);
+    }
+
+    return { success: true, dispatchNumber, updatedItemCount: updatedItems.length };
   });
 }
 
