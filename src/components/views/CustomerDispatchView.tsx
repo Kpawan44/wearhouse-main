@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Plus, Check, Play, Send, CheckSquare, X, ArrowUpRight, HelpCircle, FileText, Search, Truck, Info, AlertTriangle, ShieldAlert, Trash2, RotateCcw } from 'lucide-react';
+import { Plus, Check, Play, Send, CheckSquare, X, ArrowUpRight, HelpCircle, FileText, Search, Truck, Info, AlertTriangle, ShieldAlert, Trash2, RotateCcw, Pencil, Lock, Save } from 'lucide-react';
 import { Outward, Product, Warehouse, UserRole, Stock, Customer, getLiveAvailableQty } from '../../types';
 import { Swipeable } from '../Swipeable';
 import { generateNextUniqueSeries, isSeriesUnique } from '../../utils/seriesUtils';
@@ -12,6 +12,19 @@ interface CustomerDispatchViewProps {
   stocks: Stock[];
   customers: Customer[];
   onAddOutward: (outward: Omit<Outward, 'id'>) => Promise<void>;
+  onEditOutward?: (
+    dispatchNumber: string,
+    updatedVoucher: {
+      date: string;
+      customerId: string;
+      customerName: string;
+      vehicleNumber: string;
+      driverName: string;
+      transportName: string;
+      remarks: string;
+      invoiceNumber?: string;
+    }
+  ) => Promise<void>;
   onDeleteOutward: (id: string) => Promise<void>;
   onRearrangeSeries?: () => Promise<any>;
   currentUserRole: UserRole;
@@ -45,6 +58,7 @@ export const CustomerDispatchView: React.FC<CustomerDispatchViewProps> = ({
   stocks,
   customers,
   onAddOutward,
+  onEditOutward,
   onDeleteOutward,
   onRearrangeSeries,
   currentUserRole,
@@ -75,6 +89,70 @@ export const CustomerDispatchView: React.FC<CustomerDispatchViewProps> = ({
   const [invoiceNumber, setInvoiceNumber] = useState('');
 
   const [customDispatchNumber, setCustomDispatchNumber] = useState('');
+
+  // Edit Voucher Modal States
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editingDispatch, setEditingDispatch] = useState<GroupedDispatch | null>(null);
+  const [editDate, setEditDate] = useState('');
+  const [editCustomerId, setEditCustomerId] = useState('');
+  const [editVehicleNumber, setEditVehicleNumber] = useState('');
+  const [editDriverName, setEditDriverName] = useState('');
+  const [editTransportName, setEditTransportName] = useState('');
+  const [editRemarks, setEditRemarks] = useState('');
+  const [editInvoiceNumber, setEditInvoiceNumber] = useState('');
+  const [editError, setEditError] = useState('');
+  const [isSubmittingEdit, setIsSubmittingEdit] = useState(false);
+
+  const openEditModal = (disp: GroupedDispatch) => {
+    setEditingDispatch(disp);
+    setEditDate(disp.date || new Date().toISOString().slice(0, 10));
+    setEditCustomerId(disp.customerId || '');
+    setEditVehicleNumber(disp.vehicleNumber && disp.vehicleNumber !== 'N/A' ? disp.vehicleNumber : '');
+    setEditDriverName(disp.driverName && disp.driverName !== 'N/A' ? disp.driverName : '');
+    setEditTransportName(disp.transportName && disp.transportName !== 'N/A' ? disp.transportName : '');
+    setEditRemarks(disp.remarks || '');
+    setEditInvoiceNumber(disp.invoiceNumber && disp.invoiceNumber !== 'N/A' ? disp.invoiceNumber : '');
+    setEditError('');
+    setIsEditModalOpen(true);
+  };
+
+  const handleSaveEditVoucher = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingDispatch || !onEditOutward) return;
+    setEditError('');
+
+    if (!editCustomerId) {
+      setEditError('Please select a customer client.');
+      return;
+    }
+
+    const selectedCust = customers.find(c => c.id === editCustomerId);
+    if (!selectedCust) {
+      setEditError('Selected customer was not found.');
+      return;
+    }
+
+    setIsSubmittingEdit(true);
+    try {
+      await onEditOutward(editingDispatch.dispatchNumber, {
+        date: editDate,
+        customerId: editCustomerId,
+        customerName: selectedCust.name,
+        vehicleNumber: editVehicleNumber.trim() || 'N/A',
+        driverName: editDriverName.trim() || 'N/A',
+        transportName: editTransportName.trim() || 'N/A',
+        remarks: editRemarks.trim() || 'Customer order dispatch.',
+        invoiceNumber: editInvoiceNumber.trim() || 'N/A',
+      });
+      setFormSuccess(`Dispatch voucher ${editingDispatch.dispatchNumber} updated successfully!`);
+      setIsEditModalOpen(false);
+      setEditingDispatch(null);
+    } catch (err: any) {
+      setEditError(err.message || 'Failed to update dispatch voucher.');
+    } finally {
+      setIsSubmittingEdit(false);
+    }
+  };
 
   const isAuthorized = currentUserRole === 'Super Admin' || currentUserRole === 'Store Operator';
   const primaryWh = warehouses.find(w => w.isPrimary);
@@ -452,16 +530,24 @@ export const CustomerDispatchView: React.FC<CustomerDispatchViewProps> = ({
                     <span className="text-[9px] text-gray-400 font-mono block">Vehicle: {disp.vehicleNumber} | Driver: {disp.driverName}</span>
                   </div>
 
-                  {currentUserRole === 'Super Admin' && (
-                    <div className="flex justify-end pt-2 border-t border-slate-50">
+                  <div className="flex items-center justify-between pt-2 border-t border-slate-50">
+                    {isAuthorized && onEditOutward && (
+                      <button
+                        onClick={() => openEditModal(disp)}
+                        className="px-2.5 py-1 text-[11px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-md border border-indigo-200 flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
+                      >
+                        <Pencil className="w-3 h-3 text-indigo-600" /> Edit Voucher
+                      </button>
+                    )}
+                    {currentUserRole === 'Super Admin' && (
                       <button
                         onClick={() => handleDeleteGroupedDispatch(disp.dispatchNumber, disp.items)}
-                        className="px-2.5 py-1 text-[10px] font-bold text-slate-400 hover:text-rose-600 bg-slate-50 rounded-md border border-slate-100 flex items-center gap-1 cursor-pointer transition-colors"
+                        className="px-2.5 py-1 text-[10px] font-bold text-slate-400 hover:text-rose-600 bg-slate-50 rounded-md border border-slate-100 flex items-center gap-1 cursor-pointer transition-colors ml-auto"
                       >
                         <Trash2 className="w-3 h-3" /> Delete Dispatch
                       </button>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               </Swipeable>
             );
@@ -482,13 +568,13 @@ export const CustomerDispatchView: React.FC<CustomerDispatchViewProps> = ({
                 <th className="px-6 py-3.5 font-bold">Line Items (SKU / Product / Qty)</th>
                 <th className="px-6 py-3.5 font-bold">Total Qty</th>
                 <th className="px-6 py-3.5 font-bold">Carrier & Vehicle</th>
-                {currentUserRole === 'Super Admin' && <th className="px-6 py-3.5 font-bold text-right">Actions</th>}
+                <th className="px-6 py-3.5 font-bold text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100 text-xs text-gray-600 font-medium">
               {filteredGroupedDispatches.length === 0 ? (
                 <tr>
-                  <td colSpan={currentUserRole === 'Super Admin' ? 8 : 7} className="text-center py-12 text-gray-400">
+                  <td colSpan={8} className="text-center py-12 text-gray-400">
                     <Info className="w-5 h-5 mx-auto mb-2 text-gray-300" />
                     <span>No customer dispatch records found matching filters.</span>
                   </td>
@@ -541,17 +627,29 @@ export const CustomerDispatchView: React.FC<CustomerDispatchViewProps> = ({
                         <div className="text-[11px] font-semibold text-gray-800">Carrier: {disp.transportName}</div>
                         <div className="text-[10px] text-gray-400 font-mono">Vehicle: {disp.vehicleNumber} | Driver: {disp.driverName}</div>
                       </td>
-                      {currentUserRole === 'Super Admin' && (
-                        <td className="px-6 py-4 text-right pt-4">
-                          <button
-                            onClick={() => handleDeleteGroupedDispatch(disp.dispatchNumber, disp.items)}
-                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer inline-flex items-center"
-                            title="Delete dispatch group"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </td>
-                      )}
+                      <td className="px-6 py-4 text-right pt-4">
+                        <div className="flex items-center justify-end gap-1.5">
+                          {isAuthorized && onEditOutward && (
+                            <button
+                              onClick={() => openEditModal(disp)}
+                              className="px-2.5 py-1 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors cursor-pointer inline-flex items-center gap-1 font-bold text-xs shadow-2xs"
+                              title="Edit Customer Dispatch Voucher"
+                            >
+                              <Pencil className="w-3 h-3 text-indigo-600" />
+                              <span>Edit Voucher</span>
+                            </button>
+                          )}
+                          {currentUserRole === 'Super Admin' && (
+                            <button
+                              onClick={() => handleDeleteGroupedDispatch(disp.dispatchNumber, disp.items)}
+                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer inline-flex items-center"
+                              title="Delete dispatch group"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
                     </tr>
                   );
                 })
@@ -844,6 +942,212 @@ export const CustomerDispatchView: React.FC<CustomerDispatchViewProps> = ({
                 </button>
               </div>
             </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Edit Dispatch Voucher Modal */}
+      <AnimatePresence>
+        {isEditModalOpen && editingDispatch && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs"
+          >
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 25 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 25 }}
+              transition={{ type: 'spring', damping: 25, stiffness: 320 }}
+              className="relative w-full max-w-2xl max-h-[calc(100vh-4rem)] bg-white rounded-xl shadow-2xl border border-gray-100 overflow-hidden flex flex-col"
+            >
+              {/* Header */}
+              <div className="bg-slate-950 text-white px-6 py-4 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-2">
+                  <Pencil className="w-4 h-4 text-indigo-400" />
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-xs font-black uppercase tracking-wider text-white">
+                        Edit Customer Dispatch Voucher
+                      </h3>
+                      <span className="bg-indigo-900/80 text-indigo-300 font-mono font-bold text-[10px] px-2 py-0.5 rounded border border-indigo-700">
+                        {editingDispatch.dispatchNumber}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-gray-400 mt-0.5">
+                      Update recipient client, transport, carrier, and invoice details for this dispatch voucher
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setIsEditModalOpen(false)}
+                  className="text-gray-400 hover:text-white p-1 rounded-lg transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Error alerts */}
+              {editError && (
+                <div className="mx-6 mt-4 p-3 bg-rose-50 border border-rose-200 text-rose-800 text-[11px] rounded-lg font-bold flex gap-2 shrink-0">
+                  <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0" />
+                  <span>{editError}</span>
+                </div>
+              )}
+
+              {/* Edit Form */}
+              <form onSubmit={handleSaveEditVoucher} className="p-6 space-y-4 overflow-y-auto flex-1">
+                {/* Dispatch Series Number (Locked) & Date */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block flex items-center gap-1">
+                      <Lock className="w-3 h-3 text-slate-400" /> Dispatch Series Number (Permanent)
+                    </label>
+                    <div className="w-full bg-slate-100 border border-slate-200 rounded-lg px-3 py-2 text-xs font-mono font-bold text-slate-700 flex items-center justify-between">
+                      <span>{editingDispatch.dispatchNumber}</span>
+                      <span className="text-[9px] font-sans font-semibold text-slate-500 bg-white border border-slate-200 px-1.5 py-0.5 rounded">Locked</span>
+                    </div>
+                    <p className="text-[9px] text-slate-400">★ Posted document numbering is permanently immutable under Change #11.</p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Dispatch Date *</label>
+                    <input
+                      type="date"
+                      required
+                      value={editDate}
+                      onChange={(e) => setEditDate(e.target.value)}
+                      className="w-full bg-slate-50 border border-gray-200 rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none text-gray-800 font-semibold"
+                    />
+                  </div>
+                </div>
+
+                {/* Warehouse (Read-only) & Customer Client */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Fulfillment Source Facility</label>
+                    <div className="w-full bg-slate-100 border border-slate-200 rounded-lg px-3 py-2 text-xs font-semibold text-slate-700">
+                      {editingDispatch.warehouseName}
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Recipient Customer Client *</label>
+                    <select
+                      required
+                      value={editCustomerId}
+                      onChange={(e) => setEditCustomerId(e.target.value)}
+                      className="w-full bg-slate-50 border border-gray-200 rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none text-gray-800 font-semibold"
+                    >
+                      <option value="">-- Select Customer Profile --</option>
+                      {customers.map(c => (
+                        <option key={c.id} value={c.id}>{c.name} {c.gstNumber ? `(${c.gstNumber})` : ''}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Invoice Number & Carrier Details */}
+                <div className="space-y-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider block">Logistics & Billing Metadata</span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">Invoice Number</label>
+                      <input
+                        type="text"
+                        value={editInvoiceNumber}
+                        onChange={(e) => setEditInvoiceNumber(e.target.value)}
+                        placeholder="e.g. INV-2026-045"
+                        className="w-full bg-white border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none font-medium text-gray-800"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">Vehicle / Transport Reg No.</label>
+                      <input
+                        type="text"
+                        value={editVehicleNumber}
+                        onChange={(e) => setEditVehicleNumber(e.target.value)}
+                        placeholder="e.g. MH-12-AB-1234"
+                        className="w-full bg-white border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none font-medium text-gray-800"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">Driver Name & Contact</label>
+                      <input
+                        type="text"
+                        value={editDriverName}
+                        onChange={(e) => setEditDriverName(e.target.value)}
+                        placeholder="e.g. Ramesh Patil"
+                        className="w-full bg-white border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none font-medium text-gray-800"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">Carrier / Transporter Name</label>
+                      <input
+                        type="text"
+                        value={editTransportName}
+                        onChange={(e) => setEditTransportName(e.target.value)}
+                        placeholder="e.g. BlueDart Cargo"
+                        className="w-full bg-white border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none font-medium text-gray-800"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Line Items Preview */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Dispatched Line Items ({editingDispatch.items.length})</label>
+                  <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 max-h-36 overflow-y-auto space-y-1.5">
+                    {editingDispatch.items.map((it, idx) => (
+                      <div key={idx} className="flex items-center justify-between text-xs border-b border-dashed border-slate-200 last:border-0 pb-1 last:pb-0">
+                        <div className="flex flex-col">
+                          <span className="font-semibold text-slate-800">{it.itemName}</span>
+                          <span className="text-[9px] text-gray-400 font-mono">{it.itemCode}</span>
+                        </div>
+                        <span className="font-mono text-rose-600 font-bold bg-rose-50 px-2 py-0.5 rounded border border-rose-200 text-xs">
+                          -{it.qty} Units
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Remarks */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Waybill Remarks & Memo</label>
+                  <textarea
+                    rows={2}
+                    value={editRemarks}
+                    onChange={(e) => setEditRemarks(e.target.value)}
+                    placeholder="Log any client purchase order numbers or transit instructions here"
+                    className="w-full bg-slate-50 border border-gray-200 rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none font-medium text-gray-800 resize-none"
+                  />
+                </div>
+
+                <div className="pt-4 border-t border-gray-100 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsEditModalOpen(false)}
+                    className="bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold px-4 py-2 rounded-lg text-xs cursor-pointer transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSubmittingEdit}
+                    className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold px-5 py-2 rounded-lg text-xs flex items-center gap-1.5 cursor-pointer transition-all shadow-xs"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>{isSubmittingEdit ? 'Saving...' : 'Save Voucher Changes'}</span>
+                  </button>
+                </div>
+              </form>
             </motion.div>
           </motion.div>
         )}

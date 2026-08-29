@@ -1,8 +1,8 @@
-node_modules/
-build/
+﻿node_modules/
 dist/
-coverage/
+dist_electron/
+*.exe
+.env
+.env.local
 .DS_Store
-*.log
-.env*
-!.env.example
+Thumbs.db

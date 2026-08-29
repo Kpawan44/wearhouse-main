@@ -9,7 +9,8 @@ import {
   setDoc,
   query,
   where,
-  deleteDoc
+  deleteDoc,
+  writeBatch
 } from 'firebase/firestore';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { db, auth, getDoc, getDocs } from './firebase';
@@ -1613,6 +1614,73 @@ export default function App() {
     });
   };
 
+  // 4.1 EDIT CUSTOMER DISPATCH VOUCHER
+  const handleEditOutwardGroup = async (
+    dispatchNumber: string,
+    updatedVoucher: {
+      date: string;
+      customerId: string;
+      customerName: string;
+      vehicleNumber: string;
+      driverName: string;
+      transportName: string;
+      remarks: string;
+      invoiceNumber?: string;
+    }
+  ) => {
+    if (currentRole === 'Viewer') {
+      alert('Access Denied: Users with the Viewer role are not authorized to edit customer dispatch vouchers.');
+      return;
+    }
+
+    try {
+      const matchingOutwards = outwards.filter(o => o.dispatchNumber === dispatchNumber);
+      if (matchingOutwards.length === 0) {
+        alert(`Dispatch order ${dispatchNumber} not found.`);
+        return;
+      }
+
+      if (isOnline) {
+        const batch = writeBatch(db);
+        matchingOutwards.forEach(out => {
+          if (out.id) {
+            const docRef = doc(db, 'outwards', out.id);
+            batch.update(docRef, {
+              date: updatedVoucher.date,
+              customerId: updatedVoucher.customerId,
+              customerName: updatedVoucher.customerName,
+              vehicleNumber: updatedVoucher.vehicleNumber || 'N/A',
+              driverName: updatedVoucher.driverName || 'N/A',
+              transportName: updatedVoucher.transportName || 'N/A',
+              remarks: updatedVoucher.remarks || 'Customer order dispatch.',
+              invoiceNumber: updatedVoucher.invoiceNumber || 'N/A',
+              updatedAt: new Date().toISOString(),
+              updatedBy: `${currentRole} (${currentUserName || 'Admin'})`
+            });
+          }
+        });
+
+        await batch.commit();
+      }
+
+      await logAudit(
+        'Edit Customer Dispatch Voucher',
+        'Material Outward',
+        `Edited voucher details for Dispatch ${dispatchNumber} (Customer: ${updatedVoucher.customerName}, Inv: ${updatedVoucher.invoiceNumber || 'N/A'}, Vehicle: ${updatedVoucher.vehicleNumber || 'N/A'}).`
+      );
+
+      await sendNotification(
+        'Customer Dispatch Voucher Updated',
+        `Dispatch Voucher ${dispatchNumber} details were updated by ${currentUserName || currentRole}.`,
+        'transaction'
+      );
+    } catch (err: any) {
+      console.error("Error editing dispatch voucher:", err);
+      alert(`Failed to update dispatch voucher: ${err.message || err}`);
+      throw err;
+    }
+  };
+
   // 5. INTER-WAREHOUSE TRANSFERS
   const handleAddTransfer = async (tr: Omit<Transfer, 'id'>) => {
     if (currentRole === 'Viewer') {
@@ -2530,6 +2598,7 @@ export default function App() {
             stocks={displayStocks}
             customers={derivedCustomers}
             onAddOutward={handleAddOutward}
+            onEditOutward={handleEditOutwardGroup}
             onDeleteOutward={handleDeleteOutward}
             onRearrangeSeries={handleRearrangeDispatchSeries}
             currentUserRole={currentRole}
