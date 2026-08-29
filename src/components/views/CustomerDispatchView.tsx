@@ -205,7 +205,10 @@ export const CustomerDispatchView: React.FC<CustomerDispatchViewProps> = ({
 
     for (const [code, reqQty] of Object.entries(aggregateQtyMap)) {
       const prod = products.find(p => p.itemCode === code)!;
-      const sourceStock = stocks.find(s => s.itemCode === code && s.warehouseId === editingDispatch.warehouseId);
+      const sourceStock = stocks.find(s => 
+        s.itemCode === code && 
+        (s.warehouseId === editingDispatch.warehouseId || (s.warehouseName && editingDispatch.warehouseName && s.warehouseName.toLowerCase() === editingDispatch.warehouseName.toLowerCase()))
+      );
       const currentAvailable = sourceStock ? getLiveAvailableQty(sourceStock, warehouses) : 0;
       const prevDispatchedForThis = origQtyMap[code] || 0;
       const maxPossible = currentAvailable + prevDispatchedForThis;
@@ -1214,7 +1217,10 @@ export const CustomerDispatchView: React.FC<CustomerDispatchViewProps> = ({
 
                   <div className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
                     {editItems.map((row, idx) => {
-                      const sourceStock = stocks.find(s => s.itemCode === row.itemCode && s.warehouseId === editingDispatch.warehouseId);
+                      const sourceStock = stocks.find(s => 
+                        s.itemCode === row.itemCode && 
+                        (s.warehouseId === editingDispatch.warehouseId || (s.warehouseName && editingDispatch.warehouseName && s.warehouseName.toLowerCase() === editingDispatch.warehouseName.toLowerCase()))
+                      );
                       const currentAvailable = sourceStock ? getLiveAvailableQty(sourceStock, warehouses) : 0;
                       const origItem = editingDispatch.items.find(i => i.itemCode === row.itemCode);
                       const origQty = origItem ? origItem.qty : 0;

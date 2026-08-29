@@ -17,7 +17,8 @@ import {
   DocumentReference,
   query,
   where,
-  getDocs
+  getDocs,
+  getDoc
 } from 'firebase/firestore';
 import { Inward, Outward, Transfer, StockMovement, Stock, Product, UserRole } from '../types';
 
@@ -27,6 +28,83 @@ import { Inward, Outward, Transfer, StockMovement, Stock, Product, UserRole } fr
  */
 export function getStockDocId(warehouseId: string, itemCode: string): string {
   return `${warehouseId}_${itemCode}`;
+}
+
+/**
+ * Helper to locate the exact authoritative stock document reference in Firestore.
+ * Matches existing documents by warehouseId/warehouseName and itemCode, falling back to deterministic ID.
+ */
+export async function findStockDocRef(
+  db: Firestore,
+  warehouseIdOrCode: string,
+  itemCode: string,
+  warehouseName?: string
+): Promise<DocumentReference> {
+  const deterministicId = getStockDocId(warehouseIdOrCode, itemCode);
+  
+  const q = query(collection(db, 'stocks'), where('itemCode', '==', itemCode));
+  const snap = await getDocs(q);
+
+  const targetWhId = (warehouseIdOrCode || '').toLowerCase().trim();
+  const targetWhName = (warehouseName || '').toLowerCase().trim();
+
+  for (const docSnap of snap.docs) {
+    const data = docSnap.data();
+    const docWhId = (data.warehouseId || '').toLowerCase().trim();
+    const docWhName = (data.warehouseName || '').toLowerCase().trim();
+
+    if (
+      docSnap.id === deterministicId ||
+      docWhId === targetWhId ||
+      (targetWhName && docWhName === targetWhName)
+    ) {
+      return doc(db, 'stocks', docSnap.id);
+    }
+  }
+
+  return doc(db, 'stocks', deterministicId);
+}
+
+/**
+ * Helper to locate all stock document references for a list of items in a given warehouse.
+ */
+export async function findStockDocRefsForWarehouse(
+  db: Firestore,
+  warehouseIdOrCode: string,
+  itemCodes: string[],
+  warehouseName?: string
+): Promise<Record<string, DocumentReference>> {
+  const refs: Record<string, DocumentReference> = {};
+  const snap = await getDocs(collection(db, 'stocks'));
+
+  const targetWhId = (warehouseIdOrCode || '').toLowerCase().trim();
+  const targetWhName = (warehouseName || '').toLowerCase().trim();
+
+  const matchedDocsByItemCode: Record<string, string> = {};
+
+  snap.forEach(docSnap => {
+    const data = docSnap.data();
+    const docItemCode = data.itemCode;
+    const docWhId = (data.warehouseId || '').toLowerCase().trim();
+    const docWhName = (data.warehouseName || '').toLowerCase().trim();
+
+    if (
+      docWhId === targetWhId ||
+      (targetWhName && docWhName === targetWhName)
+    ) {
+      matchedDocsByItemCode[docItemCode] = docSnap.id;
+    }
+  });
+
+  for (const code of itemCodes) {
+    if (matchedDocsByItemCode[code]) {
+      refs[code] = doc(db, 'stocks', matchedDocsByItemCode[code]);
+    } else {
+      refs[code] = doc(db, 'stocks', getStockDocId(warehouseIdOrCode, code));
+    }
+  }
+
+  return refs;
 }
 
 /**
@@ -129,6 +207,7 @@ export function calculateUpdatedStock(
 }
 
 // ============================================================================
+// ============================================================================
 // 1. ATOMIC INWARD GRN POSTING
 // Writes: Inward Doc + Stock Doc + Movement Ledger Doc
 // ============================================================================
@@ -141,8 +220,8 @@ export async function postInwardAtomic(
 ): Promise<{ inwardId: string; movementId: string; stockDocId: string }> {
   assertCanWriteStock(role, 'post Inward GRN documents');
   const inwardDocRef = doc(collection(db, 'inwards'));
-  const stockDocId = getStockDocId(inward.warehouseId, inward.itemCode);
-  const stockDocRef = doc(db, 'stocks', stockDocId);
+  const stockDocRef = await findStockDocRef(db, inward.warehouseId, inward.itemCode, inward.warehouseName);
+  const stockDocId = stockDocRef.id;
   const movementDocRef = doc(collection(db, 'movements'));
 
   await runTransaction(db, async (transaction) => {
@@ -209,8 +288,8 @@ export async function postOutwardAtomic(
 ): Promise<{ outwardId: string; movementId: string; stockDocId: string }> {
   assertCanWriteStock(role, 'post Outward Customer Dispatches');
   const outwardDocRef = doc(collection(db, 'outwards'));
-  const stockDocId = getStockDocId(outward.warehouseId, outward.itemCode);
-  const stockDocRef = doc(db, 'stocks', stockDocId);
+  const stockDocRef = await findStockDocRef(db, outward.warehouseId, outward.itemCode, outward.warehouseName);
+  const stockDocId = stockDocRef.id;
   const movementDocRef = doc(collection(db, 'movements'));
 
   await runTransaction(db, async (transaction) => {
@@ -318,12 +397,10 @@ export async function updateTransferStatusAtomic(
     const destStockDocRefs: DocumentReference[] = [];
 
     for (const item of transferItems) {
-      const srcDocId = getStockDocId(tr.sourceWarehouseId, item.itemCode);
-      sourceStockDocRefs.push(doc(db, 'stocks', srcDocId));
+      sourceStockDocRefs.push(await findStockDocRef(db, tr.sourceWarehouseId, item.itemCode, tr.sourceWarehouseName));
 
       if (nextStatus === 'Received') {
-        const destDocId = getStockDocId(tr.destWarehouseId, item.itemCode);
-        destStockDocRefs.push(doc(db, 'stocks', destDocId));
+        destStockDocRefs.push(await findStockDocRef(db, tr.destWarehouseId, item.itemCode, tr.destWarehouseName));
       }
     }
 
@@ -562,6 +639,25 @@ export async function undoTransferAtomic(
   const { transferId, targetStatus, user, role, productBarcodes = {} } = params;
   assertSuperAdmin(role, 'undo or revert Transfer orders');
   const transferDocRef = doc(db, 'transfers', transferId);
+  const transferSnapBefore = await getDoc(transferDocRef);
+  if (!transferSnapBefore.exists()) {
+    throw new Error(`Transfer order ${transferId} not found.`);
+  }
+
+  const trBefore = transferSnapBefore.data() as Transfer;
+  const transferItems = trBefore.items && trBefore.items.length > 0
+    ? trBefore.items
+    : [{ itemCode: trBefore.itemCode, itemName: trBefore.itemName, qty: trBefore.qty, receivedQty: trBefore.qty, shortQty: 0 }];
+
+  const sourceStockDocRefs: DocumentReference[] = [];
+  const destStockDocRefs: DocumentReference[] = [];
+
+  for (const item of transferItems) {
+    sourceStockDocRefs.push(await findStockDocRef(db, trBefore.sourceWarehouseId, item.itemCode, trBefore.sourceWarehouseName));
+    if (trBefore.status === 'Received' || trBefore.status === 'Closed') {
+      destStockDocRefs.push(await findStockDocRef(db, trBefore.destWarehouseId, item.itemCode, trBefore.destWarehouseName));
+    }
+  }
 
   return await runTransaction(db, async (transaction) => {
     // 1. ALL READS FIRST
@@ -571,19 +667,6 @@ export async function undoTransferAtomic(
     }
 
     const tr = transferSnap.data() as Transfer;
-    const transferItems = tr.items && tr.items.length > 0
-      ? tr.items
-      : [{ itemCode: tr.itemCode, itemName: tr.itemName, qty: tr.qty, receivedQty: tr.qty, shortQty: 0 }];
-
-    const sourceStockDocRefs: DocumentReference[] = [];
-    const destStockDocRefs: DocumentReference[] = [];
-
-    for (const item of transferItems) {
-      sourceStockDocRefs.push(doc(db, 'stocks', getStockDocId(tr.sourceWarehouseId, item.itemCode)));
-      if (tr.status === 'Received' || tr.status === 'Closed') {
-        destStockDocRefs.push(doc(db, 'stocks', getStockDocId(tr.destWarehouseId, item.itemCode)));
-      }
-    }
 
     const sourceStockSnaps = await Promise.all(sourceStockDocRefs.map(ref => transaction.get(ref)));
     const destStockSnaps = destStockDocRefs.length > 0
@@ -776,8 +859,8 @@ export async function postStockAdjustmentAtomic(
   }
 ): Promise<{ movementId: string; overrideDocNo: string; stockDocId: string }> {
   assertSuperAdmin(adj.role, 'execute manual stock level overrides');
-  const stockDocId = getStockDocId(adj.warehouseId, adj.itemCode);
-  const stockDocRef = doc(db, 'stocks', stockDocId);
+  const stockDocRef = await findStockDocRef(db, adj.warehouseId, adj.itemCode, adj.warehouseName);
+  const stockDocId = stockDocRef.id;
   const movementDocRef = doc(collection(db, 'movements'));
   const overrideDocNo = `ADJ-${Math.floor(100000 + Math.random() * 900000)}`;
 
@@ -892,21 +975,20 @@ export async function revertStockAdjustmentAtomic(
   const { originalMovementId, reason, user, role, productBarcodes = {} } = params;
   assertSuperAdmin(role, 'revert manual stock level overrides');
   const origMvtRef = doc(db, 'movements', originalMovementId);
+  const origMvtSnap = await getDoc(origMvtRef);
+  if (!origMvtSnap.exists()) {
+    throw new Error(`Original movement ${originalMovementId} not found.`);
+  }
+
+  const mvt = origMvtSnap.data() as StockMovement;
+  if (mvt.reversalOf) {
+    throw new Error("A reversal movement cannot be reversed.");
+  }
+
+  const stockDocRef = await findStockDocRef(db, mvt.warehouseId, mvt.itemCode, mvt.warehouseName);
 
   return await runTransaction(db, async (transaction) => {
     // 1. ALL READS FIRST
-    const origMvtSnap = await transaction.get(origMvtRef);
-    if (!origMvtSnap.exists()) {
-      throw new Error(`Original movement ${originalMovementId} not found.`);
-    }
-
-    const mvt = origMvtSnap.data() as StockMovement;
-    if (mvt.reversalOf) {
-      throw new Error("A reversal movement cannot be reversed.");
-    }
-
-    const stockDocId = getStockDocId(mvt.warehouseId, mvt.itemCode);
-    const stockDocRef = doc(db, 'stocks', stockDocId);
     const stockSnap = await transaction.get(stockDocRef);
     const existingStock = stockSnap.exists() ? (stockSnap.data() as Stock) : null;
 
@@ -992,6 +1074,7 @@ export async function revertStockAdjustmentAtomic(
     // 3. ALL WRITES
     transaction.set(stockDocRef, updatedStock, { merge: true });
     transaction.set(reversalMvtDocRef, reversalMvtData);
+    transaction.update(origMvtRef, { isReverted: true, revertedBy: user, revertedAt: now.toISOString() });
 
     return {
       reversalMovementId: reversalMvtDocRef.id,
@@ -1020,8 +1103,8 @@ export async function addProductWithInitialStockAtomic(
   const productDocRef = doc(collection(db, 'products'));
 
   const hasOpeningStock = !!(openingStock && openingStock > 0 && openingWarehouseId);
-  const stockDocId = hasOpeningStock ? getStockDocId(openingWarehouseId!, product.itemCode) : undefined;
-  const stockDocRef = hasOpeningStock ? doc(db, 'stocks', stockDocId!) : null;
+  const stockDocRef = hasOpeningStock ? await findStockDocRef(db, openingWarehouseId!, product.itemCode, warehouseName) : null;
+  const stockDocId = stockDocRef ? stockDocRef.id : undefined;
   const movementDocRef = hasOpeningStock ? doc(collection(db, 'movements')) : null;
 
   await runTransaction(db, async (transaction) => {
@@ -1102,17 +1185,16 @@ export async function deleteInwardAtomic(
 ): Promise<{ success: boolean; grnNumber: string }> {
   assertSuperAdmin(role, 'delete Inward GRN records');
   const inwardDocRef = doc(db, 'inwards', inwardId);
+  const inwardSnap = await getDoc(inwardDocRef);
+  if (!inwardSnap.exists()) {
+    throw new Error(`Inward document ${inwardId} not found.`);
+  }
+
+  const inward = inwardSnap.data() as Inward;
+  const stockDocRef = await findStockDocRef(db, inward.warehouseId, inward.itemCode, inward.warehouseName);
 
   return await runTransaction(db, async (transaction) => {
     // 1. ALL READS FIRST
-    const inwardSnap = await transaction.get(inwardDocRef);
-    if (!inwardSnap.exists()) {
-      throw new Error(`Inward document ${inwardId} not found.`);
-    }
-
-    const inward = inwardSnap.data() as Inward;
-    const stockDocId = getStockDocId(inward.warehouseId, inward.itemCode);
-    const stockDocRef = doc(db, 'stocks', stockDocId);
     const stockSnap = await transaction.get(stockDocRef);
     const existingStock = stockSnap.exists() ? (stockSnap.data() as Stock) : null;
 
@@ -1167,17 +1249,16 @@ export async function deleteOutwardAtomic(
 ): Promise<{ success: boolean; dispatchNumber: string }> {
   assertSuperAdmin(role, 'delete Outward Dispatch records');
   const outwardDocRef = doc(db, 'outwards', outwardId);
+  const outwardSnap = await getDoc(outwardDocRef);
+  if (!outwardSnap.exists()) {
+    throw new Error(`Outward document ${outwardId} not found.`);
+  }
+
+  const outward = outwardSnap.data() as Outward;
+  const stockDocRef = await findStockDocRef(db, outward.warehouseId, outward.itemCode, outward.warehouseName);
 
   return await runTransaction(db, async (transaction) => {
     // 1. ALL READS FIRST
-    const outwardSnap = await transaction.get(outwardDocRef);
-    if (!outwardSnap.exists()) {
-      throw new Error(`Outward document ${outwardId} not found.`);
-    }
-
-    const outward = outwardSnap.data() as Outward;
-    const stockDocId = getStockDocId(outward.warehouseId, outward.itemCode);
-    const stockDocRef = doc(db, 'stocks', stockDocId);
     const stockSnap = await transaction.get(stockDocRef);
     const existingStock = stockSnap.exists() ? (stockSnap.data() as Stock) : null;
 
@@ -1276,10 +1357,7 @@ export async function editOutwardGroupAtomic(
   existingOutwards.forEach(o => allItemCodes.add(o.data.itemCode));
   updatedItems.forEach(i => allItemCodes.add(i.itemCode));
 
-  const stockDocRefs: Record<string, DocumentReference> = {};
-  for (const code of allItemCodes) {
-    stockDocRefs[code] = doc(db, 'stocks', getStockDocId(warehouseId, code));
-  }
+  const stockDocRefs = await findStockDocRefsForWarehouse(db, warehouseId, Array.from(allItemCodes), warehouseName);
 
   return await runTransaction(db, async (transaction) => {
     // 1. ALL READS FIRST
@@ -1464,10 +1542,7 @@ export async function deleteOutwardGroupAtomic(
     qtyMap[o.data.itemCode].qty += o.data.qty;
   });
 
-  const stockDocRefs: Record<string, DocumentReference> = {};
-  for (const code of Object.keys(qtyMap)) {
-    stockDocRefs[code] = doc(db, 'stocks', getStockDocId(warehouseId, code));
-  }
+  const stockDocRefs = await findStockDocRefsForWarehouse(db, warehouseId, Object.keys(qtyMap), warehouseName);
 
   return await runTransaction(db, async (transaction) => {
     // 1. ALL READS FIRST
@@ -1552,6 +1627,25 @@ export async function deleteTransferAtomic(
 ): Promise<{ success: boolean; transferNumber: string }> {
   assertSuperAdmin(role, 'delete Transfer requests');
   const transferDocRef = doc(db, 'transfers', transferId);
+  const transferSnapBefore = await getDoc(transferDocRef);
+  if (!transferSnapBefore.exists()) {
+    throw new Error(`Transfer document ${transferId} not found.`);
+  }
+
+  const trBefore = transferSnapBefore.data() as Transfer;
+  const transferItems = trBefore.items && trBefore.items.length > 0
+    ? trBefore.items
+    : [{ itemCode: trBefore.itemCode, itemName: trBefore.itemName, qty: trBefore.qty }];
+
+  const sourceStockDocRefs: DocumentReference[] = [];
+  const destStockDocRefs: DocumentReference[] = [];
+
+  for (const item of transferItems) {
+    sourceStockDocRefs.push(await findStockDocRef(db, trBefore.sourceWarehouseId, item.itemCode, trBefore.sourceWarehouseName));
+    if (trBefore.status === 'Received' || trBefore.status === 'Closed') {
+      destStockDocRefs.push(await findStockDocRef(db, trBefore.destWarehouseId, item.itemCode, trBefore.destWarehouseName));
+    }
+  }
 
   return await runTransaction(db, async (transaction) => {
     // 1. ALL READS FIRST
@@ -1561,19 +1655,6 @@ export async function deleteTransferAtomic(
     }
 
     const tr = transferSnap.data() as Transfer;
-    const transferItems = tr.items && tr.items.length > 0
-      ? tr.items
-      : [{ itemCode: tr.itemCode, itemName: tr.itemName, qty: tr.qty }];
-
-    const sourceStockDocRefs: DocumentReference[] = [];
-    const destStockDocRefs: DocumentReference[] = [];
-
-    for (const item of transferItems) {
-      sourceStockDocRefs.push(doc(db, 'stocks', getStockDocId(tr.sourceWarehouseId, item.itemCode)));
-      if (tr.status === 'Received' || tr.status === 'Closed') {
-        destStockDocRefs.push(doc(db, 'stocks', getStockDocId(tr.destWarehouseId, item.itemCode)));
-      }
-    }
 
     const sourceStockSnaps = await Promise.all(sourceStockDocRefs.map(ref => transaction.get(ref)));
     const destStockSnaps = destStockDocRefs.length > 0
@@ -1746,6 +1827,17 @@ export async function reverseMovementAtomic(
   const { movementId, customReason, user, role, productBarcodes = {} } = params;
   assertSuperAdmin(role, 'reverse ledger movements');
   const mvtRef = doc(db, 'movements', movementId);
+  const mvtSnapBefore = await getDoc(mvtRef);
+  if (!mvtSnapBefore.exists()) {
+    throw new Error(`Movement record ${movementId} not found.`);
+  }
+
+  const mvtBefore = mvtSnapBefore.data() as StockMovement;
+  if (mvtBefore.reversalOf) {
+    throw new Error("A reversal movement cannot be reversed.");
+  }
+
+  const stockDocRef = await findStockDocRef(db, mvtBefore.warehouseId, mvtBefore.itemCode, mvtBefore.warehouseName);
 
   return await runTransaction(db, async (transaction) => {
     // 1. ALL READS FIRST
@@ -1759,8 +1851,6 @@ export async function reverseMovementAtomic(
       throw new Error("A reversal movement cannot be reversed.");
     }
 
-    const stockDocId = getStockDocId(mvt.warehouseId, mvt.itemCode);
-    const stockDocRef = doc(db, 'stocks', stockDocId);
     const stockSnap = await transaction.get(stockDocRef);
     const existingStock = stockSnap.exists() ? (stockSnap.data() as Stock) : null;
 
