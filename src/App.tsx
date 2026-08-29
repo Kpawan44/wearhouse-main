@@ -53,6 +53,7 @@ import {
   deleteOutwardAtomic,
   deleteTransferAtomic,
   editOutwardGroupAtomic,
+  deleteOutwardGroupAtomic,
   reverseMovementAtomic,
   getStockDocId
 } from './utils/atomicStockTransactions';
@@ -2307,6 +2308,57 @@ export default function App() {
     }
   };
 
+  const handleDeleteOutwardGroup = async (dispatchNumber: string) => {
+    if (currentRole === 'Viewer') {
+      alert('Access Denied: Users with Viewer role are not authorized to delete customer dispatch records.');
+      return;
+    }
+
+    try {
+      if (isOnline) {
+        const barcodesMap: Record<string, string> = {};
+        for (const p of products) {
+          barcodesMap[p.itemCode] = p.barcode;
+        }
+
+        const res = await deleteOutwardGroupAtomic(
+          db,
+          dispatchNumber,
+          currentRole,
+          `${currentUserName || currentRole}`,
+          barcodesMap
+        );
+
+        await reconcileStockBalances();
+        await logAudit(
+          'Delete Customer Dispatch Order',
+          'Material Outward',
+          `Deleted Dispatch Order ${dispatchNumber} (${res.deletedCount} item records deleted, stock restored to warehouse).`
+        );
+      } else {
+        const matching = outwards.filter(o => o.dispatchNumber === dispatchNumber);
+        for (const out of matching) {
+          if (out.id) await deleteDoc(doc(db, 'outwards', out.id));
+        }
+        await logAudit(
+          'Delete Customer Dispatch Order',
+          'Material Outward',
+          `Deleted Dispatch Order ${dispatchNumber} offline.`
+        );
+      }
+
+      await sendNotification(
+        'Customer Dispatch Deleted',
+        `Dispatch Voucher ${dispatchNumber} was deleted and stock restored by ${currentUserName || currentRole}.`,
+        'transaction'
+      );
+    } catch (err: any) {
+      console.error("Failed to delete dispatch group:", err);
+      alert(`Failed to delete dispatch order: ${err.message || err}`);
+      throw err;
+    }
+  };
+
   const handleDeleteTransfer = async (id: string) => {
     if (currentRole !== 'Super Admin') {
       alert('Access Denied: Only Super Admins are authorized to delete Transfer requests.');
@@ -2597,6 +2649,7 @@ export default function App() {
             onAddOutward={handleAddOutward}
             onEditOutward={handleEditOutwardGroup}
             onDeleteOutward={handleDeleteOutward}
+            onDeleteOutwardGroup={handleDeleteOutwardGroup}
             onRearrangeSeries={handleRearrangeDispatchSeries}
             currentUserRole={currentRole}
             currentWarehouseId={currentWarehouseId}

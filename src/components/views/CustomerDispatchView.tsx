@@ -33,6 +33,7 @@ interface CustomerDispatchViewProps {
     }>
   ) => Promise<void>;
   onDeleteOutward: (id: string) => Promise<void>;
+  onDeleteOutwardGroup?: (dispatchNumber: string) => Promise<void>;
   onRearrangeSeries?: () => Promise<any>;
   currentUserRole: UserRole;
   currentWarehouseId?: string;
@@ -67,6 +68,7 @@ export const CustomerDispatchView: React.FC<CustomerDispatchViewProps> = ({
   onAddOutward,
   onEditOutward,
   onDeleteOutward,
+  onDeleteOutwardGroup,
   onRearrangeSeries,
   currentUserRole,
   currentWarehouseId,
@@ -440,16 +442,30 @@ export const CustomerDispatchView: React.FC<CustomerDispatchViewProps> = ({
   };
 
   const handleDeleteGroupedDispatch = async (dispatchNumber: string, itemsList: Array<{ id?: string }>) => {
-    if (window.confirm(`Are you sure you want to permanently delete Dispatch Order "${dispatchNumber}" and reverse all of its ${itemsList.length} item line records?\n\nNote: Posted document numbers are immutable and historical document numbering will remain permanent.`)) {
+    if (!isAuthorized) {
+      alert('Access Denied: You are not authorized to delete customer dispatch orders.');
+      return;
+    }
+
+    if (window.confirm(`Are you sure you want to permanently delete Dispatch Order "${dispatchNumber}" and reverse all of its ${itemsList.length} item line records back into warehouse stock?\n\nNote: Posted document numbering is permanent for audit compliance.`)) {
       try {
-        for (const item of itemsList) {
-          if (item.id) {
-            await onDeleteOutward(item.id);
+        if (onDeleteOutwardGroup) {
+          await onDeleteOutwardGroup(dispatchNumber);
+        } else {
+          for (const item of itemsList) {
+            if (item.id) {
+              await onDeleteOutward(item.id);
+            }
           }
         }
-      } catch (err) {
+        setFormSuccess(`Dispatch Order ${dispatchNumber} was successfully deleted and inventory was restored.`);
+        if (isEditModalOpen) {
+          setIsEditModalOpen(false);
+          setEditingDispatch(null);
+        }
+      } catch (err: any) {
         console.error('Error deleting dispatch order:', err);
-        alert('Failed to completely delete dispatch order.');
+        alert(`Failed to delete dispatch order: ${err?.message || err}`);
       }
     }
   };
@@ -559,7 +575,7 @@ export const CustomerDispatchView: React.FC<CustomerDispatchViewProps> = ({
             return (
               <Swipeable
                 key={disp.dispatchNumber}
-                onSwipeLeft={currentUserRole === 'Super Admin' ? () => handleDeleteGroupedDispatch(disp.dispatchNumber, disp.items) : undefined}
+                onSwipeLeft={isAuthorized ? () => handleDeleteGroupedDispatch(disp.dispatchNumber, disp.items) : undefined}
                 rightLabel="Delete"
                 rightBgColor="bg-rose-600"
               >
@@ -572,44 +588,36 @@ export const CustomerDispatchView: React.FC<CustomerDispatchViewProps> = ({
                     <span className="text-[10px] text-gray-400 font-mono">{disp.date}</span>
                   </div>
 
+                  {/* Customer and warehouse badge */}
                   <div>
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-0.5">Customer Client</span>
-                    <strong className="text-gray-900 font-extrabold text-xs block">{disp.customerName}</strong>
+                    <div className="font-bold text-gray-900 text-sm flex items-center justify-between">
+                      <span>{disp.customerName}</span>
+                      <span className="text-[10px] font-mono font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                        {disp.warehouseName}
+                      </span>
+                    </div>
                     {disp.invoiceNumber && disp.invoiceNumber !== 'N/A' && (
-                      <span className="inline-block mt-1 text-[9px] font-mono font-bold text-slate-600 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded">
-                        Invoice No: {disp.invoiceNumber}
+                      <span className="inline-block mt-1 text-[10px] font-mono font-bold text-slate-600 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded">
+                        Inv No: {disp.invoiceNumber}
                       </span>
                     )}
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3 text-[10px]">
-                    <div>
-                      <span className="text-slate-400 font-semibold block uppercase mb-0.5">Source Facility</span>
-                      <span className="font-semibold text-slate-800 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
-                        {disp.warehouseName}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-slate-400 font-semibold block uppercase mb-0.5">Grand Outward Qty</span>
-                      <span className="font-black text-rose-600 font-mono text-xs">
-                        -{totalQty} Units
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Items list inside card */}
-                  <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-100 space-y-1.5">
-                    {disp.items.map((it, idx) => (
-                      <div key={idx} className="flex items-center justify-between text-[10px] border-b border-dashed border-slate-200 last:border-0 pb-1 last:pb-0 pt-1 first:pt-0 gap-2">
-                        <div className="flex flex-col min-w-0">
-                          <span className="font-semibold text-slate-800 truncate leading-tight">{it.itemName}</span>
-                          <span className="text-[8px] text-gray-400 font-mono">{it.itemCode}</span>
+                  {/* Line items list */}
+                  <div className="bg-slate-50/70 p-2.5 rounded-lg border border-slate-100 space-y-1.5">
+                    <span className="text-[9px] font-extrabold uppercase text-slate-400 tracking-wider block">
+                      Dispatched Items ({disp.items.length})
+                    </span>
+                    <div className="space-y-1">
+                      {disp.items.map((item, idx) => (
+                        <div key={idx} className="flex items-center justify-between text-xs font-mono">
+                          <span className="text-gray-700 truncate max-w-[180px]">{item.itemName}</span>
+                          <span className="text-rose-600 font-bold bg-rose-50 border border-rose-100 px-1.5 py-0.5 rounded text-[10px]">
+                            -{item.qty} Pcs
+                          </span>
                         </div>
-                        <span className="font-mono text-rose-600 font-bold shrink-0 bg-rose-50/50 px-1 rounded text-[10px]">
-                          -{it.qty}
-                        </span>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
 
                   {/* Carrier details */}
@@ -627,12 +635,13 @@ export const CustomerDispatchView: React.FC<CustomerDispatchViewProps> = ({
                         <Pencil className="w-3 h-3 text-indigo-600" /> Edit Voucher
                       </button>
                     )}
-                    {currentUserRole === 'Super Admin' && (
+                    {isAuthorized && (
                       <button
                         onClick={() => handleDeleteGroupedDispatch(disp.dispatchNumber, disp.items)}
-                        className="px-2.5 py-1 text-[10px] font-bold text-slate-400 hover:text-rose-600 bg-slate-50 rounded-md border border-slate-100 flex items-center gap-1 cursor-pointer transition-colors ml-auto"
+                        className="px-2.5 py-1 text-[10px] font-bold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-md border border-rose-200 flex items-center gap-1 cursor-pointer transition-colors ml-auto shadow-2xs"
+                        title="Delete entire dispatch voucher"
                       >
-                        <Trash2 className="w-3 h-3" /> Delete Dispatch
+                        <Trash2 className="w-3 h-3 text-rose-600" /> Delete Dispatch
                       </button>
                     )}
                   </div>
@@ -727,11 +736,11 @@ export const CustomerDispatchView: React.FC<CustomerDispatchViewProps> = ({
                               <span>Edit Voucher</span>
                             </button>
                           )}
-                          {currentUserRole === 'Super Admin' && (
+                          {isAuthorized && (
                             <button
                               onClick={() => handleDeleteGroupedDispatch(disp.dispatchNumber, disp.items)}
                               className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer inline-flex items-center"
-                              title="Delete dispatch group"
+                              title="Delete dispatch group and restore stock"
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
@@ -1289,22 +1298,36 @@ export const CustomerDispatchView: React.FC<CustomerDispatchViewProps> = ({
                   />
                 </div>
 
-                <div className="pt-4 border-t border-gray-100 flex items-center justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setIsEditModalOpen(false)}
-                    className="bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold px-4 py-2 rounded-lg text-xs cursor-pointer transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isSubmittingEdit}
-                    className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold px-5 py-2 rounded-lg text-xs flex items-center gap-1.5 cursor-pointer transition-all shadow-xs"
-                  >
-                    <Save className="w-3.5 h-3.5" />
-                    <span>{isSubmittingEdit ? 'Saving...' : 'Save Voucher Changes'}</span>
-                  </button>
+                <div className="pt-4 border-t border-gray-100 flex items-center justify-between gap-2">
+                  {isAuthorized ? (
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteGroupedDispatch(editingDispatch.dispatchNumber, editingDispatch.items)}
+                      className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold px-3.5 py-2 rounded-lg text-xs flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs"
+                      title="Permanently delete this dispatch voucher and restore inventory"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                      <span>Delete Voucher</span>
+                    </button>
+                  ) : <div />}
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsEditModalOpen(false)}
+                      className="bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold px-4 py-2 rounded-lg text-xs cursor-pointer transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSubmittingEdit}
+                      className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold px-5 py-2 rounded-lg text-xs flex items-center gap-1.5 cursor-pointer transition-all shadow-xs"
+                    >
+                      <Save className="w-3.5 h-3.5" />
+                      <span>{isSubmittingEdit ? 'Saving...' : 'Save Voucher Changes'}</span>
+                    </button>
+                  </div>
                 </div>
               </form>
             </motion.div>

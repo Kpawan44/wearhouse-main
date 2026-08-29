@@ -1429,6 +1429,117 @@ export async function editOutwardGroupAtomic(
 }
 
 // ============================================================================
+// 9.2 ATOMIC DELETE ENTIRE OUTWARD DISPATCH GROUP BY DISPATCH NUMBER
+// Writes: Delete Outward Docs + Restore Stock Docs + Reversal Movements
+// ============================================================================
+export async function deleteOutwardGroupAtomic(
+  db: Firestore,
+  dispatchNumber: string,
+  role: UserRole,
+  user: string = 'Super Admin',
+  productBarcodes: Record<string, string> = {}
+): Promise<{ success: boolean; dispatchNumber: string; deletedCount: number }> {
+  assertCanWriteStock(role, 'delete Outward Customer Dispatch orders');
+
+  const outwardsQuery = query(collection(db, 'outwards'), where('dispatchNumber', '==', dispatchNumber));
+  const existingOutwardsSnap = await getDocs(outwardsQuery);
+  if (existingOutwardsSnap.empty) {
+    throw new Error(`No customer dispatch records found for dispatch number "${dispatchNumber}".`);
+  }
+
+  const existingOutwards: Array<{ id: string; data: Outward }> = existingOutwardsSnap.docs.map(d => ({
+    id: d.id,
+    data: d.data() as Outward
+  }));
+
+  const warehouseId = existingOutwards[0].data.warehouseId;
+  const warehouseName = existingOutwards[0].data.warehouseName;
+
+  // Aggregate quantities by itemCode to restore stock
+  const qtyMap: Record<string, { itemName: string; qty: number }> = {};
+  existingOutwards.forEach(o => {
+    if (!qtyMap[o.data.itemCode]) {
+      qtyMap[o.data.itemCode] = { itemName: o.data.itemName, qty: 0 };
+    }
+    qtyMap[o.data.itemCode].qty += o.data.qty;
+  });
+
+  const stockDocRefs: Record<string, DocumentReference> = {};
+  for (const code of Object.keys(qtyMap)) {
+    stockDocRefs[code] = doc(db, 'stocks', getStockDocId(warehouseId, code));
+  }
+
+  return await runTransaction(db, async (transaction) => {
+    // 1. ALL READS FIRST
+    const stockSnaps: Record<string, Stock | null> = {};
+    for (const [code, ref] of Object.entries(stockDocRefs)) {
+      const sSnap = await transaction.get(ref);
+      stockSnaps[code] = sSnap.exists() ? (sSnap.data() as Stock) : null;
+    }
+
+    // 2. IN-MEMORY COMPUTATION (RESTORE STOCK)
+    const now = new Date();
+    const dateStr = now.toISOString().slice(0, 10);
+    const timeStr = now.toLocaleTimeString();
+
+    const stockWrites: Array<{ ref: DocumentReference; data: Partial<Stock> }> = [];
+    const movementWrites: Array<{ ref: DocumentReference; data: Omit<StockMovement, 'id'> }> = [];
+
+    for (const [code, info] of Object.entries(qtyMap)) {
+      const existingStock = stockSnaps[code];
+      const barcode = productBarcodes[code] || `BAR-${code}`;
+
+      const updatedStock = calculateUpdatedStock(
+        existingStock,
+        warehouseId,
+        warehouseName,
+        code,
+        info.itemName,
+        barcode,
+        'availableQty',
+        info.qty
+      );
+
+      stockWrites.push({ ref: stockDocRefs[code], data: updatedStock });
+
+      const reversalMvtRef = doc(collection(db, 'movements'));
+      movementWrites.push({
+        ref: reversalMvtRef,
+        data: {
+          date: dateStr,
+          time: timeStr,
+          itemCode: code,
+          itemName: info.itemName,
+          warehouseId,
+          warehouseName,
+          qty: info.qty,
+          transactionType: 'Outward (Reversal)',
+          referenceNumber: `REV-${dispatchNumber}`,
+          user,
+          remarks: `[Admin Removal] Complete deletion of Dispatch Order ${dispatchNumber} (${info.qty} Pcs restored to ${warehouseName}).`
+        }
+      });
+    }
+
+    // 3. ALL WRITES
+    for (const out of existingOutwards) {
+      const outRef = doc(db, 'outwards', out.id);
+      transaction.delete(outRef);
+    }
+
+    for (const sw of stockWrites) {
+      transaction.set(sw.ref, sw.data, { merge: true });
+    }
+
+    for (const mw of movementWrites) {
+      transaction.set(mw.ref, mw.data);
+    }
+
+    return { success: true, dispatchNumber, deletedCount: existingOutwards.length };
+  });
+}
+
+// ============================================================================
 // 10. ATOMIC DELETE TRANSFER WITH STOCK REVERSAL
 // Writes: Delete Transfer Doc + Restore Stock Docs + Reversal Movements
 // ============================================================================
