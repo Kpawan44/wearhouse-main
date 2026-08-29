@@ -1359,120 +1359,88 @@ export async function editOutwardGroupAtomic(
 
   const stockDocRefs = await findStockDocRefsForWarehouse(db, warehouseId, Array.from(allItemCodes), warehouseName);
 
-  return await runTransaction(db, async (transaction) => {
-    // 1. ALL READS FIRST
-    const stockSnaps: Record<string, Stock | null> = {};
-    for (const [code, ref] of Object.entries(stockDocRefs)) {
-      const sSnap = await transaction.get(ref);
-      stockSnaps[code] = sSnap.exists() ? (sSnap.data() as Stock) : null;
-    }
+  try {
+    return await runTransaction(db, async (transaction) => {
+      // 1. ALL READS FIRST
+      const stockSnaps: Record<string, Stock | null> = {};
+      for (const [code, ref] of Object.entries(stockDocRefs)) {
+        const sSnap = await transaction.get(ref);
+        stockSnaps[code] = sSnap.exists() ? (sSnap.data() as Stock) : null;
+      }
 
-    // 2. IN-MEMORY COMPUTATION OF NET STOCK DELTAS
-    const oldQtyMap: Record<string, number> = {};
-    existingOutwards.forEach(o => {
-      oldQtyMap[o.data.itemCode] = (oldQtyMap[o.data.itemCode] || 0) + o.data.qty;
-    });
+      // 2. IN-MEMORY COMPUTATION OF NET STOCK DELTAS
+      const oldQtyMap: Record<string, number> = {};
+      existingOutwards.forEach(o => {
+        oldQtyMap[o.data.itemCode] = (oldQtyMap[o.data.itemCode] || 0) + o.data.qty;
+      });
 
-    const newQtyMap: Record<string, number> = {};
-    updatedItems.forEach(i => {
-      newQtyMap[i.itemCode] = (newQtyMap[i.itemCode] || 0) + i.qty;
-    });
+      const newQtyMap: Record<string, number> = {};
+      updatedItems.forEach(i => {
+        newQtyMap[i.itemCode] = (newQtyMap[i.itemCode] || 0) + i.qty;
+      });
 
-    const now = new Date();
-    const dateStr = updatedVoucher.date || now.toISOString().slice(0, 10);
-    const timeStr = now.toLocaleTimeString();
+      const now = new Date();
+      const dateStr = updatedVoucher.date || now.toISOString().slice(0, 10);
+      const timeStr = now.toLocaleTimeString();
 
-    const stockWrites: Array<{ ref: DocumentReference; data: Partial<Stock> }> = [];
-    const movementWrites: Array<{ ref: DocumentReference; data: Omit<StockMovement, 'id'> }> = [];
+      const stockWrites: Array<{ ref: DocumentReference; data: Partial<Stock> }> = [];
+      const movementWrites: Array<{ ref: DocumentReference; data: Omit<StockMovement, 'id'> }> = [];
 
-    for (const code of allItemCodes) {
-      const oldQty = oldQtyMap[code] || 0;
-      const newQty = newQtyMap[code] || 0;
-      const netDelta = oldQty - newQty; // Positive = add back stock; Negative = deduct more stock
+      for (const code of allItemCodes) {
+        const oldQty = oldQtyMap[code] || 0;
+        const newQty = newQtyMap[code] || 0;
+        const netDelta = oldQty - newQty; // Positive = add back stock; Negative = deduct more stock
 
-      const existingStock = stockSnaps[code];
-      const prodName = updatedItems.find(i => i.itemCode === code)?.itemName || existingOutwards.find(o => o.data.itemCode === code)?.data.itemName || `Item ${code}`;
-      const barcode = productBarcodes[code] || `BAR-${code}`;
+        const existingStock = stockSnaps[code];
+        const prodName = updatedItems.find(i => i.itemCode === code)?.itemName || existingOutwards.find(o => o.data.itemCode === code)?.data.itemName || `Item ${code}`;
+        const barcode = productBarcodes[code] || `BAR-${code}`;
 
-      if (netDelta !== 0) {
-        const updatedStock = calculateUpdatedStock(
-          existingStock,
-          warehouseId,
-          warehouseName,
-          code,
-          prodName,
-          barcode,
-          'availableQty',
-          netDelta
-        );
-
-        if ((updatedStock.availableQty || 0) < 0) {
-          throw new Error(`NEGATIVE SALES BLOCK: Editing dispatch ${dispatchNumber} for product "${prodName}" (${code}) would cause negative stock balance (${updatedStock.availableQty} Pcs) in ${warehouseName}.`);
-        }
-
-        stockWrites.push({ ref: stockDocRefs[code], data: updatedStock });
-
-        // Record adjustment movement in immutable ledger
-        const mvtRef = doc(collection(db, 'movements'));
-        movementWrites.push({
-          ref: mvtRef,
-          data: {
-            date: dateStr,
-            time: timeStr,
-            itemCode: code,
-            itemName: prodName,
+        if (netDelta !== 0) {
+          const updatedStock = calculateUpdatedStock(
+            existingStock,
             warehouseId,
             warehouseName,
-            qty: -netDelta,
-            transactionType: 'Outward (Dispatch)',
-            referenceNumber: dispatchNumber,
-            user,
-            remarks: `[Voucher Edit] Dispatch ${dispatchNumber} item adjustment (Old Qty: ${oldQty}, New Qty: ${newQty}, Diff: ${-netDelta} Pcs). Inv: ${updatedVoucher.invoiceNumber || 'N/A'}.`
+            code,
+            prodName,
+            barcode,
+            'availableQty',
+            netDelta
+          );
+
+          if ((updatedStock.availableQty || 0) < 0) {
+            throw new Error(`NEGATIVE SALES BLOCK: Editing dispatch ${dispatchNumber} for product "${prodName}" (${code}) would cause negative stock balance (${updatedStock.availableQty} Pcs) in ${warehouseName}.`);
           }
-        });
+
+          stockWrites.push({ ref: stockDocRefs[code], data: updatedStock });
+
+          // Record adjustment movement in immutable ledger
+          const mvtRef = doc(collection(db, 'movements'));
+          movementWrites.push({
+            ref: mvtRef,
+            data: {
+              date: dateStr,
+              time: timeStr,
+              itemCode: code,
+              itemName: prodName,
+              warehouseId,
+              warehouseName,
+              qty: -netDelta,
+              transactionType: 'Outward (Dispatch)',
+              referenceNumber: dispatchNumber,
+              user,
+              remarks: `[Voucher Edit] Dispatch ${dispatchNumber} item adjustment (Old Qty: ${oldQty}, New Qty: ${newQty}, Diff: ${-netDelta} Pcs). Inv: ${updatedVoucher.invoiceNumber || 'N/A'}.`
+            }
+          });
+        }
       }
-    }
 
-    // 3. OUTWARD DOCUMENT SYNCHRONIZATION
-    const minLen = Math.min(existingOutwards.length, updatedItems.length);
+      // 3. OUTWARD DOCUMENT SYNCHRONIZATION
+      const minLen = Math.min(existingOutwards.length, updatedItems.length);
 
-    for (let i = 0; i < minLen; i++) {
-      const outRef = doc(db, 'outwards', existingOutwards[i].id);
-      const item = updatedItems[i];
-      transaction.update(outRef, {
-        dispatchNumber,
-        date: dateStr,
-        customerId: updatedVoucher.customerId,
-        customerName: updatedVoucher.customerName,
-        warehouseId,
-        warehouseName,
-        itemCode: item.itemCode,
-        itemName: item.itemName,
-        qty: item.qty,
-        vehicleNumber: updatedVoucher.vehicleNumber || 'N/A',
-        driverName: updatedVoucher.driverName || 'N/A',
-        transportName: updatedVoucher.transportName || 'N/A',
-        remarks: updatedVoucher.remarks || 'Customer order dispatch.',
-        invoiceNumber: updatedVoucher.invoiceNumber || 'N/A',
-        updatedAt: now.toISOString(),
-        updatedBy: user
-      });
-    }
-
-    // Delete extra outward docs if new item list is shorter
-    if (existingOutwards.length > updatedItems.length) {
-      for (let i = minLen; i < existingOutwards.length; i++) {
+      for (let i = 0; i < minLen; i++) {
         const outRef = doc(db, 'outwards', existingOutwards[i].id);
-        transaction.delete(outRef);
-      }
-    }
-
-    // Create new outward docs if new item list is longer
-    if (updatedItems.length > existingOutwards.length) {
-      for (let i = minLen; i < updatedItems.length; i++) {
-        const outRef = doc(collection(db, 'outwards'));
         const item = updatedItems[i];
-        transaction.set(outRef, {
+        transaction.update(outRef, {
           dispatchNumber,
           date: dateStr,
           customerId: updatedVoucher.customerId,
@@ -1487,23 +1455,65 @@ export async function editOutwardGroupAtomic(
           transportName: updatedVoucher.transportName || 'N/A',
           remarks: updatedVoucher.remarks || 'Customer order dispatch.',
           invoiceNumber: updatedVoucher.invoiceNumber || 'N/A',
-          createdAt: now.toISOString(),
           updatedAt: now.toISOString(),
           updatedBy: user
         });
       }
-    }
 
-    // 4. WRITE STOCKS & MOVEMENTS
-    for (const sw of stockWrites) {
-      transaction.set(sw.ref, sw.data, { merge: true });
-    }
-    for (const mw of movementWrites) {
-      transaction.set(mw.ref, mw.data);
-    }
+      // Delete extra outward docs if new item list is shorter
+      if (existingOutwards.length > updatedItems.length) {
+        for (let i = minLen; i < existingOutwards.length; i++) {
+          const outRef = doc(db, 'outwards', existingOutwards[i].id);
+          transaction.delete(outRef);
+        }
+      }
 
-    return { success: true, dispatchNumber, updatedItemCount: updatedItems.length };
-  });
+      // Create new outward docs if new item list is longer
+      if (updatedItems.length > existingOutwards.length) {
+        for (let i = minLen; i < updatedItems.length; i++) {
+          const outRef = doc(collection(db, 'outwards'));
+          const item = updatedItems[i];
+          transaction.set(outRef, {
+            dispatchNumber,
+            date: dateStr,
+            customerId: updatedVoucher.customerId,
+            customerName: updatedVoucher.customerName,
+            warehouseId,
+            warehouseName,
+            itemCode: item.itemCode,
+            itemName: item.itemName,
+            qty: item.qty,
+            vehicleNumber: updatedVoucher.vehicleNumber || 'N/A',
+            driverName: updatedVoucher.driverName || 'N/A',
+            transportName: updatedVoucher.transportName || 'N/A',
+            remarks: updatedVoucher.remarks || 'Customer order dispatch.',
+            invoiceNumber: updatedVoucher.invoiceNumber || 'N/A',
+            createdAt: now.toISOString(),
+            updatedAt: now.toISOString(),
+            updatedBy: user
+          });
+        }
+      }
+
+      // 4. WRITE STOCKS & MOVEMENTS
+      for (const sw of stockWrites) {
+        transaction.set(sw.ref, sw.data, { merge: true });
+      }
+      for (const mw of movementWrites) {
+        transaction.set(mw.ref, mw.data);
+      }
+
+      return { success: true, dispatchNumber, updatedItemCount: updatedItems.length };
+    });
+  } catch (err: any) {
+    console.error(`[editOutwardGroupAtomic] Transaction Error (Code: ${err?.code || 'UNKNOWN'}, Message: ${err?.message || err}) on Dispatch "${dispatchNumber}":`, {
+      dispatchNumber,
+      warehouseId,
+      warehouseName,
+      items: updatedItems
+    });
+    throw err;
+  }
 }
 
 // ============================================================================
