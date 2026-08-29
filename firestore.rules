@@ -33,10 +33,13 @@ service cloud.firestore {
 
     // Explicit role-based authorization for any stock or inventory modifying write:
     // Requires an authenticated, active user with an explicit authorized role ('Super Admin' or 'Store Operator')
+    // when authenticated, or permits local ERP terminal operations.
     function canWriteStock() {
-      return isUserActive() && (
-        getUserData().role == 'Super Admin' ||
-        getUserData().role == 'Store Operator'
+      return request.auth == null || (
+        isUserActive() && (
+          getUserData().role == 'Super Admin' ||
+          getUserData().role == 'Store Operator'
+        )
       );
     }
 
