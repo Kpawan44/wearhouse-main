@@ -17,21 +17,21 @@ import {
 } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 
-// Firebase configuration with hardcoded fallback matching firebase-applet-config.json
+// Firebase configuration matching mfgr-mfg-erp (pawan.kumar28111993@gmail.com)
 const firebaseConfig = {
-  apiKey: "AIzaSyAtt2oAKA-Npqc26e1NtGOmt9i6mf4P4Uw",
-  authDomain: "third-cabinet-13bk6.firebaseapp.com",
-  projectId: "third-cabinet-13bk6",
-  storageBucket: "third-cabinet-13bk6.firebasestorage.app",
-  messagingSenderId: "1072101912249",
-  appId: "1:1072101912249:web:1bdea39356f964b0b33568",
-  databaseId: "ai-studio-stockflowerp-f87c4a27-cfad-410f-8d27-f672b5338709" // custom database ID used in AI Studio
+  apiKey: "AIzaSyA_jMpg-Z_E5_BoZvk8P_wE42h5gGU9dyU",
+  authDomain: "mfgr-mfg-erp.firebaseapp.com",
+  projectId: "mfgr-mfg-erp",
+  storageBucket: "mfgr-mfg-erp.firebasestorage.app",
+  messagingSenderId: "193425637256",
+  appId: "1:193425637256:web:3abcbeb4e16d6e3300043d",
+  projectNumber: "193425637256"
 };
 
 // Initialize Firebase App
 const app = initializeApp(firebaseConfig);
 
-// Initialize Firestore with custom databaseId, multi-tab persistent cache, and auto-detect long polling
+// Initialize Firestore with default database, multi-tab persistent cache, and auto-detect long polling
 let db: any;
 try {
   db = initializeFirestore(app, {
@@ -39,15 +39,15 @@ try {
     localCache: persistentLocalCache({
       tabManager: persistentMultipleTabManager()
     })
-  }, firebaseConfig.databaseId);
+  });
 } catch (cacheError) {
   console.warn("Firestore persistent cache is not supported or was blocked by browser privacy settings. Falling back to memory cache.");
   try {
     db = initializeFirestore(app, {
       experimentalAutoDetectLongPolling: true
-    }, firebaseConfig.databaseId);
+    });
   } catch (secondError) {
-    db = getFirestore(app, firebaseConfig.databaseId);
+    db = getFirestore(app);
   }
 }
 
