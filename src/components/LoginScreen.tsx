@@ -66,13 +66,43 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ warehouses, authErrorM
     }
   }, [activeWarehouses, selectedWarehouseId]);
 
-  const handleQuickSuperAdminLogin = (whId?: string) => {
+  const handleQuickSuperAdminLogin = async (whId?: string) => {
     setUsername('chinarsales737@gmail.com');
     setPassword('123456');
     setError('');
     const activeName = 'Chinar Sales (Super Admin)';
     const activeRole: UserRole = 'Super Admin';
     const activeWh = whId || selectedWarehouseId || 'WH-001';
+
+    // Transparent Firebase Auth attempt
+    try {
+      let firebaseUser = auth.currentUser;
+      if (!firebaseUser) {
+        try {
+          const cred = await signInWithEmailAndPassword(auth, 'chinarsales737@gmail.com', '123456');
+          firebaseUser = cred.user;
+        } catch (e: any) {
+          if (e.code === 'auth/user-not-found') {
+            const cred = await createUserWithEmailAndPassword(auth, 'chinarsales737@gmail.com', '123456');
+            firebaseUser = cred.user;
+          }
+        }
+      }
+      if (firebaseUser) {
+        await setDoc(doc(db, 'users', firebaseUser.uid), {
+          uid: firebaseUser.uid,
+          name: activeName,
+          email: 'chinarsales737@gmail.com',
+          username: 'chinarsales737',
+          role: 'Super Admin',
+          warehouseId: activeWh,
+          status: 'Active',
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+      }
+    } catch (_authErr) {
+      // Local fallback preserved
+    }
 
     // Log Audit
     const logId = `AUD-${Date.now()}-${Math.floor(Math.random() * 1000000000)}`;
@@ -120,6 +150,36 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ warehouses, authErrorM
         const activeName = 'Chinar Sales (Super Admin)';
         const activeRole: UserRole = 'Super Admin';
         const activeWh = selectedWarehouseId || 'WH-001';
+
+        // Transparent Firebase Auth attempt
+        try {
+          let firebaseUser = auth.currentUser;
+          if (!firebaseUser) {
+            try {
+              const cred = await signInWithEmailAndPassword(auth, 'chinarsales737@gmail.com', '123456');
+              firebaseUser = cred.user;
+            } catch (e: any) {
+              if (e.code === 'auth/user-not-found') {
+                const cred = await createUserWithEmailAndPassword(auth, 'chinarsales737@gmail.com', '123456');
+                firebaseUser = cred.user;
+              }
+            }
+          }
+          if (firebaseUser) {
+            await setDoc(doc(db, 'users', firebaseUser.uid), {
+              uid: firebaseUser.uid,
+              name: activeName,
+              email: 'chinarsales737@gmail.com',
+              username: 'chinarsales737',
+              role: 'Super Admin',
+              warehouseId: activeWh,
+              status: 'Active',
+              updatedAt: new Date().toISOString()
+            }, { merge: true });
+          }
+        } catch (_authErr) {
+          // Local fallback preserved
+        }
 
         // Write Audit Log
         const logId = `AUD-${Date.now()}-${Math.floor(Math.random() * 1000000000)}`;

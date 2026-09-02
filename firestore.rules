@@ -33,17 +33,14 @@ service cloud.firestore {
 
     // Explicit role-based authorization for any stock or inventory modifying write:
     // Requires an authenticated, active user with an explicit authorized role ('Super Admin' or 'Store Operator')
-    // when authenticated, or permits local ERP terminal operations.
     function canWriteStock() {
-      return request.auth == null || (
-        isUserActive() && (
-          getUserData().role == 'Super Admin' ||
-          getUserData().role == 'Store Operator'
-        )
+      return isUserActive() && (
+        getUserData().role == 'Super Admin' ||
+        getUserData().role == 'Store Operator'
       );
     }
 
-    // Helper to check if a document is a Draft
+    // Helper to check if a document is a Draft (only if status property exists and equals 'Draft')
     function isDraft(data) {
       return ('status' in data && data.status == 'Draft');
     }
@@ -51,21 +48,21 @@ service cloud.firestore {
     // Helper to validate Transfer document updates (Change #11: Posted number immutability & prevent Posted -> Draft)
     function isValidTransferUpdate() {
       return (isDraft(resource.data) && isDraft(request.resource.data)) ||
-             (!isDraft(request.resource.data) &&
+             (!isDraft(resource.data) && !isDraft(request.resource.data) &&
               request.resource.data.transferNumber == resource.data.transferNumber);
     }
 
     // Helper to validate Outward / Dispatch document updates (Change #11: Posted number immutability & prevent Posted -> Draft)
     function isValidOutwardUpdate() {
       return (isDraft(resource.data) && isDraft(request.resource.data)) ||
-             (!isDraft(request.resource.data) &&
+             (!isDraft(resource.data) && !isDraft(request.resource.data) &&
               request.resource.data.dispatchNumber == resource.data.dispatchNumber);
     }
 
     // Helper to validate Inward / GRN document updates (Change #11: Posted number immutability & prevent Posted -> Draft)
     function isValidInwardUpdate() {
       return (isDraft(resource.data) && isDraft(request.resource.data)) ||
-             (!isDraft(request.resource.data) &&
+             (!isDraft(resource.data) && !isDraft(request.resource.data) &&
               request.resource.data.grnNumber == resource.data.grnNumber);
     }
 
