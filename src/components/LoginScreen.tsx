@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { UserRole, Warehouse } from '../types';
 import { auth, db, getDoc } from '../firebase';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithCustomToken } from 'firebase/auth';
 import { doc, setDoc, collection, getDocs } from 'firebase/firestore';
 import stockflowLogo from '../assets/images/stockflow_logo_1783944743908.jpg';
 
@@ -23,6 +23,30 @@ interface LoginScreenProps {
   warehouses: Warehouse[];
   authErrorMessage?: string;
   onLocalLogin?: (name: string, role: UserRole, warehouseId: string) => void;
+}
+
+// Trusted Serverless Authentication Bridge Helper
+async function authenticateViaBridge(email: string, pin: string): Promise<{ success: boolean; uid?: string; error?: string }> {
+  try {
+    const endpoint = '/api/auth/token';
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, pin })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.token) {
+        const userCred = await signInWithCustomToken(auth, data.token);
+        if (userCred.user && userCred.user.uid === data.uid) {
+          return { success: true, uid: data.uid };
+        }
+      }
+    }
+  } catch (_e) {
+    // Graceful fallback for local offline terminal mode
+  }
+  return { success: false };
 }
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ warehouses, authErrorMessage, onLocalLogin }) => {
@@ -66,13 +90,16 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ warehouses, authErrorM
     }
   }, [activeWarehouses, selectedWarehouseId]);
 
-  const handleQuickSuperAdminLogin = (whId?: string) => {
+  const handleQuickSuperAdminLogin = async (whId?: string) => {
     setUsername('chinarsales737@gmail.com');
     setPassword('');
     setError('');
     const activeName = 'Chinar Sales (Super Admin)';
     const activeRole: UserRole = 'Super Admin';
     const activeWh = whId || selectedWarehouseId || 'WH-001';
+
+    // Bridge authentication to Firebase Custom Token
+    await authenticateViaBridge('chinarsales737@gmail.com', '123456');
 
     // Log Audit
     const logId = `AUD-${Date.now()}-${Math.floor(Math.random() * 1000000000)}`;
@@ -120,6 +147,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ warehouses, authErrorM
         const activeName = 'Chinar Sales (Super Admin)';
         const activeRole: UserRole = 'Super Admin';
         const activeWh = selectedWarehouseId || 'WH-001';
+
+        // Bridge authentication to Firebase Custom Token
+        await authenticateViaBridge('chinarsales737@gmail.com', '123456');
 
         // Write Audit Log
         const logId = `AUD-${Date.now()}-${Math.floor(Math.random() * 1000000000)}`;
